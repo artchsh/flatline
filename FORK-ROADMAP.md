@@ -28,7 +28,7 @@ Run `npm run lint` and `npm test` locally — nothing enforces it for you anymor
 | Frontend rework (optional, maybe Next.js + shadcn) | Deferred / optional |
 | Multi-user, no roles (admin-issued single-use invite links) | Planned |
 | Telegram-only notifications | **Done** (needs manual test) |
-| Agentic REST API with tokens | Planned |
+| Agentic REST API with tokens | **Done** (verified end to end) |
 
 ### Rebrand scope
 
@@ -245,20 +245,70 @@ socket-emit gymnastics. Suggested surface:
 | `GET` | `/api/v1/maintenance` | list |
 | `GET` | `/api/v1/tags` | list |
 
-### Plan
+### Plan — DONE
 
-- [ ] New `server/routers/api-v1-router.js`, mounted before the SPA catch-all.
-- [ ] Real token auth: `Authorization: Bearer <token>` as the primary scheme.
-      **Keep Basic auth working** for backwards compat (badges, existing scripts).
-- [ ] Tokens: unhashed-at-rest vs hashed — decide. Existing keys are hashed; an
-      agent needs to *see* its token once at creation, like a GitHub PAT.
-- [ ] Per-token scopes (`read` / `write`) so an agent can be given read-only.
-      Optional but strongly recommended — an agent with delete rights is a footgun.
-- [ ] Reuse the `apiRateLimiter`; consider raising the cap for token auth.
-- [ ] Write OpenAPI spec + a machine-readable discovery doc (`/.well-known/`)
-      so an agent can self-document.
-- [ ] Refactor shared query logic out of the socket handlers so REST and socket
-      don't diverge. Without this this becomes a second, drifting implementation.
+- [x] `server/routers/api-v1-router.js`, mounted in `server.js` after `api-router`
+      and before the SPA catch-all.
+- [x] Token auth in `server/auth.js` as `tokenAuth(scope)`:
+      `Authorization: Bearer <token>` primary, HTTP Basic (token as password) also
+      accepted. Attaches `req.apiUser` / `req.apiKeyID` / `req.apiScopes`.
+- [x] `resolveAPIKey()` replaces the old boolean `verifyAPIKey()` internals and is
+      reused by the existing basic-auth path, so both schemes share one validator.
+      Hardened: requires the `uk` prefix, requires a numeric key id, rejects an
+      empty secret.
+- [x] Scopes via migration `2026-10-03-0000-api-key-scopes.js` (nullable `scopes`
+      column). `NULL` = full access, so pre-existing keys keep working.
+      `apiKeyScopes()` maps NULL → `[read, write]`.
+- [x] `addAPIKey` socket handler validates requested scopes and rejects unknown
+      ones rather than silently granting full access. `APIKey.toPublicJSON()` now
+      reports scopes.
+- [x] Endpoints: monitors CRUD, `GET /monitors/:id/heartbeats`,
+      `POST /monitors/:id/heartbeat` (agent-reported check result, no push token
+      needed), `GET /monitor-types`, incidents (list/create), status-pages,
+      maintenance, tags, notifications, `GET /health` aggregate.
+- [x] Discovery: `GET /api/v1` index and `GET /api/v1/openapi.json` so an agent can
+      self-document without a human.
+- [x] Rate limiting reuses `apiRateLimiter` (60/min), returning 429.
+- [x] Safety: monitor writes go through a `MONITOR_WRITABLE_FIELDS` allowlist, so
+      `user_id` and unknown keys are ignored and reported in `ignoredFields`;
+      `monitor.validate()` is reused so the API cannot store what the UI rejects;
+      every monitor query is scoped by `user_id`.
+
+### Schema findings (corrected during implementation)
+
+- `status_page` and `tag` have **no `user_id` column** — they are global in
+  upstream, not per-user. Incidents therefore have no per-user scoping either;
+  incidents are listed across all pages, matching what the UI can see.
+- `tag` is joined via `monitor_tag`, so `/tags` returns only tags this user's
+  monitors actually use.
+- `monitor.user_id` became a **string** FK to `better_auth_user.id`
+  (migration `2026-05-28-0010-better-auth-foreign-key`), not an integer to `user`.
+- `http` / `https` are handled inside `monitor.js` and are **not** in
+  `monitorTypeList`, so they are advertised separately by `/monitor-types`.
+- `retry_interval` defaults to 0 in the schema but `validate()` rejects anything
+  below 1, so creation applies the same `retryInterval = interval` fixup the UI does.
+
+### Verified end to end against a running server
+
+17 auth unit tests pass; manually exercised against a real instance on port 3210:
+
+- 401 with no token / bad token, 403 for a read-only token on write
+- create → list → patch → heartbeat(up, ping 123) → health → delete, all green
+- monitor id 999 → 404, non-numeric id → 400
+- `user_id` and a bogus field ignored and reported in `ignoredFields`
+- `/notifications` redacts `telegramBotToken`
+- all six read-only collections return `ok: true`
+
+### Not done
+
+- [ ] Refactoring shared query logic out of the socket handlers. REST and
+      Socket.IO still have separate implementations; the main risk is drift in
+      monitor create/update semantics over time.
+- [ ] No OpenAPI file is served from disk — the spec is generated inline in JS.
+- [ ] No pagination beyond a hard `LIMIT 200` on incidents and `limit<=1000` on
+      heartbeats.
+- [ ] Token creation still requires the Socket.IO UI; there is no REST endpoint
+      for minting or revoking tokens.
 
 ---
 

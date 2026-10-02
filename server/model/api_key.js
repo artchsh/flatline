@@ -40,6 +40,7 @@ class APIKey extends BeanModel {
      * @returns {object} Object ready to parse
      */
     toPublicJSON() {
+        let scopes = this.scopes ? String(this.scopes).split(",").map((s) => s.trim()).filter((s) => s) : null;
         return {
             id: this.id,
             name: this.name,
@@ -48,6 +49,8 @@ class APIKey extends BeanModel {
             active: this.active,
             expires: this.expires,
             status: this.getStatus(),
+            // null means the key predates scopes and has full access.
+            scopes: scopes ?? [ "read", "write" ],
         };
     }
 
@@ -66,6 +69,11 @@ class APIKey extends BeanModel {
         bean.user_id = userID;
         bean.active = key.active;
         bean.expires = key.expires;
+
+        // Undefined scopes stay NULL, which reads as full access.
+        if (key.scopes !== undefined) {
+            bean.scopes = key.scopes;
+        }
 
         await R.store(bean);
 

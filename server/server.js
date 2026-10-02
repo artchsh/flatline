@@ -350,6 +350,11 @@ app.use(function (req, res, next) {
     const apiRouter = require("./routers/api-router");
     app.use(apiRouter);
 
+    // REST API v1 (token auth, for automation and agents).
+    // Mounted after apiRouter but before the SPA catch-all below.
+    const apiV1Router = require("./routers/api-v1-router");
+    app.use(apiV1Router);
+
     // Status Page Router
     const statusPageRouter = require("./routers/status-page-router");
     app.use(statusPageRouter);

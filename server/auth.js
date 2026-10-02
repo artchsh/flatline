@@ -41,27 +41,80 @@ exports.login = async function (username, password) {
  * @returns {boolean} API is ok?
  */
 async function verifyAPIKey(key) {
+    return !!(await resolveAPIKey(key));
+}
+
+/**
+ * Resolve an API key to its database row.
+ *
+ * Token format is `uk<keyID>_<secret>`. The key ID is in the clear so the
+ * row can be looked up directly, and only the secret half is hashed, so a
+ * leaked database cannot be replayed into working tokens.
+ * @param {string} key Full API key, including the `uk<id>_` prefix
+ * @returns {Promise<?Bean>} The matching api_key row, or null if invalid,
+ * expired, inactive or malformed
+ */
+async function resolveAPIKey(key) {
     if (typeof key !== "string") {
-        return false;
+        return null;
     }
 
-    // uk prefix + key ID is before _
-    let index = key.substring(2, key.indexOf("_"));
-    let clear = key.substring(key.indexOf("_") + 1, key.length);
+    // Expect "uk" prefix, then the key ID up to the first underscore.
+    if (!key.startsWith("uk")) {
+        return null;
+    }
 
-    let hash = await R.findOne("api_key", " id=? ", [index]);
+    let separator = key.indexOf("_");
+    if (separator < 0) {
+        return null;
+    }
 
-    if (hash === null) {
-        return false;
+    let index = key.substring(2, separator);
+    let clear = key.substring(separator + 1);
+
+    // Guard against a non-numeric ID producing an odd query.
+    if (!/^[0-9]+$/.test(index) || clear.length === 0) {
+        return null;
+    }
+
+    let hash = await R.findOne("api_key", " id = ? ", [index]);
+
+    if (!hash) {
+        return null;
     }
 
     let current = dayjs();
     let expiry = dayjs(hash.expires);
     if (expiry.diff(current) < 0 || !hash.active) {
-        return false;
+        return null;
     }
 
-    return hash && passwordHash.verify(clear, hash.key);
+    if (!passwordHash.verify(clear, hash.key)) {
+        return null;
+    }
+
+    return hash;
+}
+
+/**
+ * Resolve the scopes granted to an API key.
+ *
+ * Keys created before scopes existed have a NULL `scopes` value; those are
+ * treated as full access so upgrading does not lock anyone out.
+ * @param {Bean} apiKeyBean Row returned by resolveAPIKey
+ * @returns {string[]} Array of granted scopes
+ */
+function apiKeyScopes(apiKeyBean) {
+    let scopes = apiKeyBean.scopes;
+
+    if (!scopes) {
+        return [ "read", "write" ];
+    }
+
+    return String(scopes)
+        .split(",")
+        .map((s) => s.trim().toLowerCase())
+        .filter((s) => s.length > 0);
 }
 
 /**
@@ -181,3 +234,113 @@ exports.apiAuth = async function (req, res, next) {
         next();
     }
 };
+
+/**
+ * Token auth for the v1 REST API.
+ *
+ * Accepts `Authorization: Bearer <token>` as the primary scheme, and falls
+ * back to HTTP Basic (token as the password) so the same credential works
+ * from curl, scripts and agents that only speak Basic.
+ *
+ * On success the resolved key's `userID` and `scopes` are attached to the
+ * request, so handlers never need to re-validate the token.
+ * @param {string} requiredScope Scope this endpoint needs ("read" or "write")
+ * @returns {Function} Express middleware
+ */
+exports.tokenAuth = function (requiredScope = "read") {
+    return async function (req, res, next) {
+        if (await Settings.get("disableAuth")) {
+            log.warn("api-auth", "API request allowed without a token because auth is disabled");
+            req.apiUser = null;
+            req.apiScopes = [ "read", "write" ];
+            return next();
+        }
+
+        let token = extractBearerToken(req);
+
+        if (!token) {
+            res.status(401).set("WWW-Authenticate", "Bearer").json({
+                ok: false,
+                error: "unauthorized",
+                message: "Provide an API token via 'Authorization: Bearer <token>'.",
+            });
+            return;
+        }
+
+        // API Rate Limit, shared with the existing basic-auth API.
+        let pass = await apiRateLimiter.removeTokens(1);
+        if (pass < 0) {
+            res.status(429).json({
+                ok: false,
+                error: "rate_limited",
+                message: "Too frequently, try again later.",
+            });
+            return;
+        }
+
+        let apiKeyBean = await resolveAPIKey(token);
+
+        if (!apiKeyBean) {
+            log.warn("api-auth", "Failed API auth attempt: invalid, expired or inactive token");
+            res.status(401).set("WWW-Authenticate", "Bearer").json({
+                ok: false,
+                error: "unauthorized",
+                message: "Invalid, expired or inactive API token.",
+            });
+            return;
+        }
+
+        let scopes = apiKeyScopes(apiKeyBean);
+
+        if (!scopes.includes(requiredScope)) {
+            log.warn("api-auth", `Token lacks "${requiredScope}" scope (has: ${scopes.join(",") || "none"})`);
+            res.status(403).json({
+                ok: false,
+                error: "forbidden",
+                message: `This token does not have the "${requiredScope}" scope.`,
+            });
+            return;
+        }
+
+        req.apiUser = apiKeyBean.user_id;
+        req.apiKeyID = apiKeyBean.id;
+        req.apiScopes = scopes;
+        next();
+    };
+};
+
+/**
+ * Pull the API token out of a request.
+ *
+ * Bearer is preferred. Basic auth is also accepted with the token as the
+ * password and any username, matching how the existing API keys behave.
+ * @param {express.Request} req Express request object
+ * @returns {?string} The token, or null if none was supplied
+ */
+function extractBearerToken(req) {
+    let header = req.headers.authorization;
+
+    if (typeof header !== "string") {
+        return null;
+    }
+
+    if (/^bearer\s+/i.test(header)) {
+        let token = header.replace(/^bearer\s+/i, "").trim();
+        return token.length > 0 ? token : null;
+    }
+
+    if (/^basic\s+/i.test(header)) {
+        let decoded = Buffer.from(header.replace(/^basic\s+/i, "").trim(), "base64").toString("utf8");
+        let separator = decoded.indexOf(":");
+
+        if (separator < 0) {
+            return null;
+        }
+
+        // Username is unused; the token is the password.
+        let password = decoded.substring(separator + 1);
+        return password.length > 0 ? password : null;
+    }
+
+    return null;
+}

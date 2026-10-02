@@ -22,6 +22,28 @@ module.exports.apiKeySocketHandler = (socket) => {
             let clearKey = nanoid(40);
             let hashedKey = await passwordHash.generate(clearKey);
             key["key"] = hashedKey;
+
+            // Optional scopes: "read", "write", or "read,write".
+            // Anything unrecognised is rejected rather than silently downgraded,
+            // so a typo cannot quietly hand out full access.
+            if (key.scopes !== undefined && key.scopes !== null && key.scopes !== "") {
+                let requested = Array.isArray(key.scopes)
+                    ? key.scopes
+                    : String(key.scopes).split(",").map((s) => s.trim().toLowerCase()).filter((s) => s.length > 0);
+
+                let invalid = requested.filter((s) => s !== "read" && s !== "write");
+
+                if (invalid.length > 0) {
+                    throw new Error(`Invalid scope(s): ${invalid.join(", ")}. Use "read" and/or "write".`);
+                }
+
+                if (requested.length === 0) {
+                    throw new Error("At least one scope is required.");
+                }
+
+                key.scopes = requested.join(",");
+            }
+
             let bean = await APIKey.save(key, socket.userID);
 
             log.debug("apikeys", "Added API Key");
