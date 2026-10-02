@@ -10,6 +10,7 @@ import EditMaintenance from "./pages/EditMaintenance.vue";
 import List from "./pages/List.vue";
 const Settings = () => import("./pages/Settings.vue");
 import Setup from "./pages/Setup.vue";
+import Invite from "./pages/Invite.vue";
 import StatusPage from "./pages/StatusPage.vue";
 import Entry from "./pages/Entry.vue";
 import ManageStatusPage from "./pages/ManageStatusPage.vue";
@@ -18,6 +19,7 @@ import NotFound from "./pages/NotFound.vue";
 import DockerHosts from "./components/settings/Docker.vue";
 import ManageMaintenance from "./pages/ManageMaintenance.vue";
 import APIKeys from "./components/settings/APIKeys.vue";
+import Users from "./components/settings/Users.vue";
 import SetupDatabase from "./pages/SetupDatabase.vue";
 
 // Settings - Sub Pages
@@ -124,6 +126,10 @@ const routes = [
                                 component: Security,
                             },
                             {
+                                path: "users",
+                                component: Users,
+                            },
+                            {
                                 path: "api-keys",
                                 component: APIKeys,
                             },
@@ -168,6 +174,12 @@ const routes = [
     {
         path: "/setup",
         component: Setup,
+    },
+    {
+        // Single-use admin-issued signup link. Rendered outside the app
+        // layout because the recipient is not logged in yet.
+        path: "/invite/:token",
+        component: Invite,
     },
     {
         path: "/setup-database",

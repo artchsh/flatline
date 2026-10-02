@@ -88,9 +88,9 @@ Multi-user **partially exists already**:
    So "no roles" is already ~true; the work is enabling registration.
 4. `/api/setup` needs an equivalent for adding users post-setup.
 
-### Invite model — decided
+### Invite model — DONE
 
-**Admin-issued single-use magic link, no email.** The first user (admin) mints a link,
+**Admin-issued single-use magic link, no email.** Any logged-in user mints a link,
 sends it to the other person over any channel they like (Slack, Signal, carrier
 pigeon), and the recipient sets their own username + password. Link dies on use.
 
@@ -129,22 +129,71 @@ Bonus: better-auth already solved one hard problem for free — magic-link token
 atomic (`consumeVerificationValue`), and it supports `storeToken: "hashed"`. Worth copying that
 shape (hash at rest, atomic consume) into our own implementation.
 
-### Plan
+### Plan — DONE
 
-- [ ] Migration: `user_invite` table (token hash, created_by, expires_at, used_at).
-- [ ] Model `server/model/user_invite.js`: create / consume (atomic) / revoke / list.
-- [ ] Socket handler `userSocketHandler.js`: admin-only
-      `createUserInvite` / `getUserInviteList` / `revokeUserInvite`.
-- [ ] Public route `POST /api/invite/redeem` (unauthenticated, rate-limited) —
-      validates + consumes the token and creates the user in one transaction.
-- [ ] Frontend: `/invite/:token` page (username + password), and a Settings →
-      Users panel for the admin to mint/revoke links.
-- [ ] Reuse the existing `/api/setup` user-creation path so 2FA/email/username
-      handling stays identical to first-user setup.
-- [ ] Confirm per-user isolation is complete (audit the 47 `user_id` call sites for
-      unscoped queries — this is the real risk, not the role system).
-- [ ] Drop the `role` column, or leave it inert and unused.
-- [ ] Guard: last remaining admin must not be deletable/demotable.
+- [x] Migration `2026-10-03-0100-user-invite.js`: `user_invite` with `token_hash`
+      (unique), `created_by` (string FK to `better_auth_user.id`), `expires`,
+      `used_at`, `used_by`, `note`.
+- [x] Model `server/model/user_invite.js`: create / findByToken / consume /
+      revoke / listForUser / pruneExpired, plus `getStatus()`.
+- [x] Socket handler `user-invite-socket-handler.js`: `createUserInvite`,
+      `getUserInviteList`, `revokeUserInvite` (all `checkLogin`), plus
+      `checkUserInvite`, `redeemUserInvite` and `getUserInviteEnabled`
+      (unauthenticated — the recipient is not logged in yet).
+- [x] Frontend: `/invite/:token` page (`src/pages/Invite.vue`) verifies the link
+      before rendering the form, and Settings → Users (`src/components/settings/Users.vue`)
+      mints/revokes and shows the one-time link via the existing CopyableInput.
+- [x] New-user creation reuses `auth().api.createUser()`, the same path
+      `/api/setup` uses, so username/email/2FA handling is identical.
+- [x] Hourly `pruneExpired()` for long-expired rows (unref'd, `timer.unref()`).
+
+Design decisions made during implementation:
+
+- **Token is SHA-256 hashed at rest.** The plaintext exists only in the
+  `createUserInvite` response, so a leaked DB or backup cannot be replayed into
+  account creation. SHA-256 (not bcrypt) because the token is 32 random bytes —
+  nothing to brute force, and the digest must be reproducible to find the row.
+- **Single use is enforced atomically in SQL**, via
+  `UPDATE ... WHERE id = ? AND used_at IS NULL AND expires > ?`. Two simultaneous
+  redemptions cannot both succeed.
+- **Consume happens *after* account creation**, and a loser deletes the account
+  it just made rather than leaving an orphan user behind.
+- **Validation runs before consuming.** A duplicate username or a too-short
+  password returns an error and the link is still usable — verified: a link that
+  failed on a taken username was then successfully redeemed by someone else.
+- **Revoke deletes the row** rather than flagging it, so the token stops working
+  immediately.
+- No roles, so `created_by` is simply the caller and any user can mint invites.
+
+### Two redbean-node traps hit while implementing
+
+- `R.find` / `R.findOne` hydrate the registered model class; **`R.getAll` returns
+  plain objects**. Using `getAll` in `listForUser` gave
+  `invite.toJSON is not a function` at runtime even though the unit tests passed.
+  Caught only by driving a real server.
+- The model file **must be named `user_invite.js`**, not `user-invite.js`.
+  `R.autoloadModels` maps by filename, so a hyphenated name is never registered
+  and every bean comes back unhydrated.
+
+### Verified
+
+14 unit tests in `test/backend-test/test-user-invite.ts`, plus a live
+Socket.IO session against a running server:
+
+- mint → check → redeem creates a working account, and that account can log in
+  and mint its own invite (chaining works)
+- second redemption of the same link rejected
+- weak password and duplicate username rejected **without burning the link**
+- bogus / revoked links rejected; `expiryHours` bounds enforced (1–720)
+- invited user has full access, consistent with "no roles"
+
+### Not done
+
+- [ ] No way to see *which* user redeemed an invite (only `used_by` is stored,
+      not surfaced in the UI).
+- [ ] No rate limiting on `redeemUserInvite`. Token entropy makes guessing
+      infeasible, but the endpoint is unauthenticated; a limiter would be cheap.
+- [ ] Per-user isolation audit (the 47 `user_id` call sites) still outstanding.
 
 ---
 
