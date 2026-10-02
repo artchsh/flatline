@@ -301,14 +301,68 @@ socket-emit gymnastics. Suggested surface:
 
 ### Not done
 
-- [ ] Refactoring shared query logic out of the socket handlers. REST and
-      Socket.IO still have separate implementations; the main risk is drift in
-      monitor create/update semantics over time.
-- [ ] No OpenAPI file is served from disk — the spec is generated inline in JS.
-- [ ] No pagination beyond a hard `LIMIT 200` on incidents and `limit<=1000` on
-      heartbeats.
 - [ ] Token creation still requires the Socket.IO UI; there is no REST endpoint
       for minting or revoking tokens.
+- [ ] Maintenance, tags, status-pages and notifications are still unpaginated
+      (they are small in practice; add it if any grow large).
+
+---
+
+## Follow-up: shared service, OpenAPI file, pagination — DONE
+
+### 1. Shared monitor logic (`server/monitor-service.js`)
+
+`add`, `editMonitor`, `deleteMonitor`, `pauseMonitor`, `resumeMonitor` in
+`server/server.js` were ~250 lines of inline `bean.x = monitor.x` assignments,
+duplicated against REST v1. All of it now lives in `server/monitor-service.js`:
+
+- `createMonitor` / `updateMonitor` / `deleteMonitor`
+- `startMonitor` / `restartMonitor` / `pauseMonitor` / `loadOwnedMonitor`
+- `normaliseMonitorPayload` / `applyIntervalDefaults` — the camelCase→snake_case
+  column map, JSON-serialised fields, port/proxyId coercion, frontend-only key
+  stripping, and the interval repair the Vue form performs on submit
+
+The old local helpers in `server.js` are thin `@deprecated` re-exports. Net
+effect: `server.js` shrank by ~330 lines and the two transports cannot diverge.
+
+Two upstream bugs surfaced while extracting this and are now fixed:
+
+- **`getAllChildrenIDs` recursed forever on a parent cycle** and crashed the
+  process with a heap OOM. Rewritten as an iterative walk with a `visited` set.
+  Reproduced live before the fix: `PATCH /monitors/1 {"parent":1}` killed the
+  server. Now returns `400 Invalid Monitor Group`.
+- **`accepted_statuscodes` type check was dropped** during the move; restored.
+
+Also: REST `PATCH` with an invalid group topology returned `500`; it is now `400`.
+
+### 2. OpenAPI served from a file
+
+`server/routers/openapi.json` (13 paths, with schemas, security scheme, and
+pagination/error components) is loaded with `require()` and served at
+`/api/v1/openapi.json`. Served unauthenticated on purpose: it holds no secrets
+and an agent should be able to read it before minting a token.
+
+### 3. Pagination
+
+`?page=` (1-based) and `?perPage=` (default 50, hard cap 200) on `/monitors` and
+`/incidents`, returning `{ page, perPage, total, totalPages, hasMore }`. Also
+added `?active=`, `?q=` (substring on name/url) to `/monitors` and
+`?statusPageId=`, `?active=` to `/incidents`. `/monitors/:id/heartbeats` keeps
+plain `?limit` (max 1000) since it is inherently a recent-N query, but now
+reports the true `total`.
+
+### Verified
+
+16 new unit tests in `test/backend-test/test-monitor-service.ts`; 17 existing
+auth tests still pass. Against a live server: pagination pages 1/2 correct,
+`perPage=9999` capped to 200, `page=0` → 400, `?q=M2` filters, partial PATCH
+preserves untouched fields, `user_id` rejected, `type` change refused, group
+→ non-group conversion unlinks but keeps children, self-parent → 400 without
+crashing, group delete unlinks children. `lint:js` 0 errors, `vite build` OK.
+
+**Bug found and fixed by this testing:** `Monitor.getAllChildrenIDs` was
+infinite-recursive on a parent cycle. Two group monitors pointing at each other
+crashed the whole server. Now iterative with cycle detection.
 
 ---
 

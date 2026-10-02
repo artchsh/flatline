@@ -1959,17 +1959,33 @@ class Monitor extends BeanModel {
      * @returns {Promise<Array>} IDs of all children
      */
     static async getAllChildrenIDs(monitorID) {
-        const childs = await Monitor.getChildren(monitorID);
+        const childrenIDs = [];
+        const visited = new Set();
 
-        if (childs === null) {
-            return [];
-        }
+        // Iterative rather than recursive: a parent cycle stored in the
+        // database would otherwise recurse forever and exhaust the heap.
+        const queue = [ monitorID ];
 
-        let childrenIDs = [];
+        while (queue.length > 0) {
+            const currentID = queue.shift();
 
-        for (const child of childs) {
-            childrenIDs.push(child.id);
-            childrenIDs = childrenIDs.concat(await Monitor.getAllChildrenIDs(child.id));
+            if (visited.has(currentID)) {
+                continue;
+            }
+            visited.add(currentID);
+
+            const childs = await Monitor.getChildren(currentID);
+
+            if (childs === null) {
+                continue;
+            }
+
+            for (const child of childs) {
+                if (!visited.has(child.id)) {
+                    childrenIDs.push(child.id);
+                    queue.push(child.id);
+                }
+            }
         }
 
         return childrenIDs;

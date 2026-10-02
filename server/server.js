@@ -133,6 +133,8 @@ log.debug("server", "Importing Notification");
 const { Notification } = require("./notification");
 Notification.init();
 
+const monitorService = require("./monitor-service");
+
 log.debug("server", "Importing Database");
 const Database = require("./database");
 
@@ -404,60 +406,16 @@ app.use(function (req, res, next) {
         socket.on("add", async (monitor, callback) => {
             try {
                 checkLogin(socket);
-                let bean = R.dispense("monitor");
 
                 let notificationIDList = monitor.notificationIDList;
                 delete monitor.notificationIDList;
 
-                // Ensure status code ranges are strings
-                if (!monitor.accepted_statuscodes.every((code) => typeof code === "string")) {
-                    throw new Error("Accepted status codes are not all strings");
-                }
-                monitor.accepted_statuscodes_json = JSON.stringify(monitor.accepted_statuscodes);
-                delete monitor.accepted_statuscodes;
-
-                monitor.kafkaProducerBrokers = JSON.stringify(monitor.kafkaProducerBrokers);
-                monitor.kafkaProducerSaslOptions = JSON.stringify(monitor.kafkaProducerSaslOptions);
-
-                monitor.conditions = JSON.stringify(monitor.conditions);
-
-                monitor.rabbitmqNodes = JSON.stringify(monitor.rabbitmqNodes);
-
-                /*
-                 * List of frontend-only properties that should not be saved to the database.
-                 * Should clean up before saving to the database.
-                 */
-                const frontendOnlyProperties = [
-                    "humanReadableInterval",
-                    "globalpingdnsresolvetypeoptions",
-                    "responsecheck",
-                ];
-                for (const prop of frontendOnlyProperties) {
-                    if (prop in monitor) {
-                        delete monitor[prop];
-                    }
-                }
-
-                bean.import(monitor);
-                // Map camelCase frontend property to snake_case database column
-                if (monitor.retryOnlyOnStatusCodeFailure !== undefined) {
-                    bean.retry_only_on_status_code_failure = monitor.retryOnlyOnStatusCodeFailure;
-                }
-                bean.user_id = socket.userID;
-
-                bean.validate();
-
-                await R.store(bean);
-
-                await updateMonitorNotification(bean.id, notificationIDList);
+                let bean = await monitorService.createMonitor(socket.userID, monitor, {
+                    start: monitor.active !== false,
+                    notificationIDList,
+                });
 
                 await server.sendUpdateMonitorIntoList(socket, bean.id);
-
-                if (monitor.active !== false) {
-                    await startMonitor(socket.userID, bean.id);
-                }
-
-                log.info("monitor", `Added Monitor: ${bean.id} User ID: ${socket.userID}`);
 
                 callback({
                     ok: true,
@@ -478,169 +436,14 @@ app.use(function (req, res, next) {
         // Edit a monitor
         socket.on("editMonitor", async (monitor, callback) => {
             try {
-                let removeGroupChildren = false;
                 checkLogin(socket);
 
-                let bean = await R.findOne("monitor", " id = ? ", [monitor.id]);
+                let notificationIDList = monitor.notificationIDList;
+                delete monitor.notificationIDList;
 
-                if (bean.user_id !== socket.userID) {
-                    throw new Error("Permission denied.");
-                }
-
-                // Check if Parent is Descendant (would cause endless loop)
-                if (monitor.parent !== null) {
-                    const childIDs = await Monitor.getAllChildrenIDs(monitor.id);
-                    if (childIDs.includes(monitor.parent)) {
-                        throw new Error("Invalid Monitor Group");
-                    }
-                }
-
-                // Remove children if monitor type has changed (from group to non-group)
-                if (bean.type === "group" && monitor.type !== bean.type) {
-                    removeGroupChildren = true;
-                }
-
-                // Ensure status code ranges are strings
-                if (!monitor.accepted_statuscodes.every((code) => typeof code === "string")) {
-                    throw new Error("Accepted status codes are not all strings");
-                }
-
-                bean.name = monitor.name;
-                bean.description = monitor.description;
-                bean.parent = monitor.parent;
-                bean.type = monitor.type;
-                bean.subtype = monitor.subtype;
-                bean.url = monitor.url;
-                bean.wsIgnoreSecWebsocketAcceptHeader = monitor.wsIgnoreSecWebsocketAcceptHeader;
-                bean.wsSubprotocol = monitor.wsSubprotocol;
-                bean.method = monitor.method;
-                bean.body = monitor.body;
-                bean.ipFamily = monitor.ipFamily;
-                bean.headers = monitor.headers;
-                bean.basic_auth_user = monitor.basic_auth_user;
-                bean.basic_auth_pass = monitor.basic_auth_pass;
-                bean.bearer_token = monitor.bearer_token;
-                bean.timeout = monitor.timeout;
-                bean.oauth_client_id = monitor.oauth_client_id;
-                bean.oauth_client_secret = monitor.oauth_client_secret;
-                bean.oauth_auth_method = monitor.oauth_auth_method;
-                bean.oauth_token_url = monitor.oauth_token_url;
-                bean.oauth_scopes = monitor.oauth_scopes;
-                bean.oauth_audience = monitor.oauth_audience;
-                bean.tlsCa = monitor.tlsCa;
-                bean.tlsCert = monitor.tlsCert;
-                bean.tlsKey = monitor.tlsKey;
-                bean.interval = monitor.interval;
-                bean.retryInterval = monitor.retryInterval;
-                bean.resendInterval = monitor.resendInterval;
-                bean.hostname = monitor.hostname;
-                bean.game = monitor.game;
-                bean.maxretries = monitor.maxretries;
-                bean.port = parseInt(monitor.port);
-                bean.location = monitor.location;
-                bean.protocol = monitor.protocol;
-
-                if (isNaN(bean.port)) {
-                    bean.port = null;
-                }
-
-                bean.keyword = monitor.keyword;
-                bean.invertKeyword = monitor.invertKeyword;
-                bean.ignoreTls = monitor.ignoreTls;
-                bean.expiryNotification = monitor.expiryNotification;
-                bean.domainExpiryNotification = monitor.domainExpiryNotification;
-                bean.upsideDown = monitor.upsideDown;
-                bean.packetSize = monitor.packetSize;
-                bean.maxredirects = monitor.maxredirects;
-                bean.accepted_statuscodes_json = JSON.stringify(monitor.accepted_statuscodes);
-                bean.save_response = monitor.saveResponse;
-                bean.save_error_response = monitor.saveErrorResponse;
-                bean.response_max_length = monitor.responseMaxLength;
-                bean.dns_resolve_type = monitor.dns_resolve_type;
-                bean.dns_resolve_server = monitor.dns_resolve_server;
-                bean.pushToken = monitor.pushToken;
-                bean.docker_container = monitor.docker_container;
-                bean.docker_host = monitor.docker_host;
-                bean.proxyId = Number.isInteger(monitor.proxyId) ? monitor.proxyId : null;
-                bean.mqttUsername = monitor.mqttUsername;
-                bean.mqttPassword = monitor.mqttPassword;
-                bean.mqttTopic = monitor.mqttTopic;
-                bean.mqttSuccessMessage = monitor.mqttSuccessMessage;
-                bean.mqttCheckType = monitor.mqttCheckType;
-                bean.mqttWebsocketPath = monitor.mqttWebsocketPath;
-                bean.databaseConnectionString = monitor.databaseConnectionString;
-                bean.databaseQuery = monitor.databaseQuery;
-                bean.authMethod = monitor.authMethod;
-                bean.authWorkstation = monitor.authWorkstation;
-                bean.authDomain = monitor.authDomain;
-                bean.grpcUrl = monitor.grpcUrl;
-                bean.grpcProtobuf = monitor.grpcProtobuf;
-                bean.grpcServiceName = monitor.grpcServiceName;
-                bean.grpcMethod = monitor.grpcMethod;
-                bean.grpcBody = monitor.grpcBody;
-                bean.grpcMetadata = monitor.grpcMetadata;
-                bean.grpcEnableTls = monitor.grpcEnableTls;
-                bean.radiusUsername = monitor.radiusUsername;
-                bean.radiusPassword = monitor.radiusPassword;
-                bean.radiusCalledStationId = monitor.radiusCalledStationId;
-                bean.radiusCallingStationId = monitor.radiusCallingStationId;
-                bean.radiusSecret = monitor.radiusSecret;
-                bean.httpBodyEncoding = monitor.httpBodyEncoding;
-                bean.expectedValue = monitor.expectedValue;
-                bean.jsonPath = monitor.jsonPath;
-                bean.kafkaProducerTopic = monitor.kafkaProducerTopic;
-                bean.kafkaProducerBrokers = JSON.stringify(monitor.kafkaProducerBrokers);
-                bean.kafkaProducerAllowAutoTopicCreation = monitor.kafkaProducerAllowAutoTopicCreation;
-                bean.kafkaProducerSaslOptions = JSON.stringify(monitor.kafkaProducerSaslOptions);
-                bean.kafkaProducerMessage = monitor.kafkaProducerMessage;
-                bean.cacheBust = monitor.cacheBust;
-                bean.kafkaProducerSsl = monitor.kafkaProducerSsl;
-                bean.kafkaProducerAllowAutoTopicCreation = monitor.kafkaProducerAllowAutoTopicCreation;
-                bean.gamedigGivenPortOnly = monitor.gamedigGivenPortOnly;
-                bean.gamedigToken = monitor.gamedigToken;
-                bean.remote_browser = monitor.remote_browser;
-                bean.screenshot_delay = monitor.screenshot_delay;
-                bean.smtpSecurity = monitor.smtpSecurity;
-                bean.snmpVersion = monitor.snmpVersion;
-                bean.snmpOid = monitor.snmpOid;
-                bean.jsonPathOperator = monitor.jsonPathOperator;
-                bean.retry_only_on_status_code_failure = Boolean(monitor.retryOnlyOnStatusCodeFailure);
-                bean.timeout = monitor.timeout;
-                bean.rabbitmqNodes = JSON.stringify(monitor.rabbitmqNodes);
-                bean.rabbitmqUsername = monitor.rabbitmqUsername;
-                bean.rabbitmqPassword = monitor.rabbitmqPassword;
-                bean.conditions = JSON.stringify(monitor.conditions);
-                bean.manual_status = monitor.manual_status;
-                bean.system_service_name = monitor.system_service_name;
-                bean.expected_tls_alert = monitor.expectedTlsAlert;
-                bean.sshUsername = monitor.sshUsername;
-                bean.sshPassword = monitor.sshPassword;
-                bean.sftpPath = monitor.sftpPath;
-                bean.sshPrivateKey = monitor.sshPrivateKey;
-                bean.sshPassphrase = monitor.sshPassphrase;
-                bean.sshAuthMethod = monitor.sshAuthMethod;
-                bean.ntp_stratum_threshold = monitor.ntpStratumThreshold;
-                bean.ntp_time_offset_threshold = monitor.ntpTimeOffsetThreshold;
-                bean.ntp_root_dispersion_threshold = monitor.ntpRootDispersionThreshold;
-
-                // ping advanced options
-                bean.ping_numeric = monitor.ping_numeric;
-                bean.ping_count = monitor.ping_count;
-                bean.ping_per_request_timeout = monitor.ping_per_request_timeout;
-
-                bean.validate();
-
-                await R.store(bean);
-
-                if (removeGroupChildren) {
-                    await Monitor.unlinkAllChildren(monitor.id);
-                }
-
-                await updateMonitorNotification(bean.id, monitor.notificationIDList);
-
-                if (await Monitor.isActive(bean.id, bean.active)) {
-                    await restartMonitor(socket.userID, bean.id);
-                }
+                const bean = await monitorService.updateMonitor(socket.userID, monitor.id, monitor, {
+                    notificationIDList,
+                });
 
                 await server.sendUpdateMonitorIntoList(socket, bean.id);
 
@@ -803,76 +606,35 @@ app.use(function (req, res, next) {
 
                 const startTime = Date.now();
 
-                // Check if this is a group monitor
-                const monitor = await R.findOne("monitor", " id = ? AND user_id = ? ", [monitorID, socket.userID]);
-
-                // Log with context about deletion type
-                if (monitor && monitor.type === "group") {
-                    if (deleteChildren) {
-                        log.info("manage", `Delete Group and Children: ${monitorID} User ID: ${socket.userID}`);
-                    } else {
-                        log.info("manage", `Delete Group (unlink children): ${monitorID} User ID: ${socket.userID}`);
-                    }
-                } else {
-                    log.info("manage", `Delete Monitor: ${monitorID} User ID: ${socket.userID}`);
-                }
-
-                if (monitor && monitor.type === "group") {
-                    // Get all children before processing
-                    const children = await Monitor.getChildren(monitorID);
-
-                    if (deleteChildren) {
-                        // Delete all child monitors recursively
-                        if (children && children.length > 0) {
-                            for (const child of children) {
-                                await Monitor.deleteMonitorRecursively(child.id, socket.userID);
-                                await server.sendDeleteMonitorFromList(socket, child.id);
-                            }
-                        }
-                    } else {
-                        // Unlink all children from the group (set parent to null)
-                        await Monitor.unlinkAllChildren(monitorID);
-
-                        // Notify frontend to update each child monitor's parent to null
-                        if (children && children.length > 0) {
-                            for (const child of children) {
-                                await server.sendUpdateMonitorIntoList(socket, child.id);
-                            }
-                        }
-                    }
-                }
-
-                // Delete the monitor itself
-                await Monitor.deleteMonitor(monitorID, socket.userID);
+                const deleted = await monitorService.deleteMonitor(socket.userID, monitorID, deleteChildren);
 
                 // Fix #2880
                 apicache.clear();
 
                 const endTime = Date.now();
-
-                // Log completion with context about children handling
-                if (monitor && monitor.type === "group") {
-                    if (deleteChildren) {
-                        log.info(
-                            "DB",
-                            `Delete Monitor completed (group and children deleted) in: ${endTime - startTime} ms`
-                        );
-                    } else {
-                        log.info(
-                            "DB",
-                            `Delete Monitor completed (group deleted, children unlinked) in: ${endTime - startTime} ms`
-                        );
-                    }
-                } else {
-                    log.info("DB", `Delete Monitor completed in: ${endTime - startTime} ms`);
-                }
+                log.info("DB", `Delete Monitor completed in: ${endTime - startTime} ms`);
 
                 callback({
                     ok: true,
                     msg: "successDeleted",
                     msgi18n: true,
                 });
-                await server.sendDeleteMonitorFromList(socket, monitorID);
+
+                // Remove the deleted ids from any connected client's list, and
+                // refresh children that were unlinked rather than deleted.
+                for (const id of deleted) {
+                    await server.sendDeleteMonitorFromList(socket, id);
+                }
+
+                if (!deleteChildren) {
+                    const monitor = await R.findOne("monitor", " id = ? ", [ monitorID ]);
+                    if (!monitor || monitor.type !== "group") {
+                        const children = await Monitor.getChildren(monitorID);
+                        for (const child of children ?? []) {
+                            await server.sendUpdateMonitorIntoList(socket, child.id);
+                        }
+                    }
+                }
             } catch (e) {
                 callback({
                     ok: false,
@@ -1383,39 +1145,56 @@ app.use(function (req, res, next) {
 })();
 
 /**
- * Update notifications for a given monitor
- * @param {number} monitorID ID of monitor to update
- * @param {number[]} notificationIDList List of new notification
- * providers to add
+ * @deprecated Use monitorService.updateMonitorNotification. Kept as a thin
+ * re-export so existing callers keep working.
+ * @param {number} monitorID Monitor to update
+ * @param {{[key: string]: boolean}} notificationIDList Notification links
  * @returns {Promise<void>}
  */
 async function updateMonitorNotification(monitorID, notificationIDList) {
-    await R.exec("DELETE FROM monitor_notification WHERE monitor_id = ? ", [monitorID]);
-
-    for (let notificationID in notificationIDList) {
-        if (notificationIDList[notificationID]) {
-            let relation = R.dispense("monitor_notification");
-            relation.monitor_id = monitorID;
-            relation.notification_id = notificationID;
-            await R.store(relation);
-        }
-    }
+    return monitorService.updateMonitorNotification(monitorID, notificationIDList);
 }
 
 /**
- * Check if a given user owns a specific monitor
- * @param {number} userID ID of user to check
- * @param {number} monitorID ID of monitor to check
+ * @deprecated Use monitorService.startMonitor.
+ * @param {string} userID Owner
+ * @param {number} monitorID Monitor to start
  * @returns {Promise<void>}
- * @throws {Error} The specified user does not own the monitor
+ */
+async function startMonitor(userID, monitorID) {
+    return monitorService.startMonitor(userID, monitorID);
+}
+
+/**
+ * @deprecated Use monitorService.restartMonitor.
+ * @param {string} userID Owner
+ * @param {number} monitorID Monitor to restart
+ * @returns {Promise<void>}
+ */
+async function restartMonitor(userID, monitorID) {
+    return monitorService.restartMonitor(userID, monitorID);
+}
+
+/**
+ * @deprecated Use monitorService.pauseMonitor.
+ * @param {string} userID Owner
+ * @param {number} monitorID Monitor to pause
+ * @returns {Promise<void>}
+ */
+async function pauseMonitor(userID, monitorID) {
+    return monitorService.pauseMonitor(userID, monitorID);
+}
+
+/**
+ * @deprecated Use monitorService.loadOwnedMonitor.
+ * @param {string} userID Owner
+ * @param {number} monitorID Monitor to check
+ * @returns {Promise<void>}
  */
 async function checkOwner(userID, monitorID) {
-    let row = await R.getRow("SELECT id FROM monitor WHERE id = ? AND user_id = ? ", [monitorID, userID]);
-
-    if (!row) {
-        throw new Error("You do not own this monitor.");
-    }
+    return monitorService.loadOwnedMonitor(userID, monitorID);
 }
+
 
 /**
  * Function called after user login
@@ -1471,58 +1250,6 @@ async function initDatabase(testMode = false) {
 
     // Patch the database
     await Database.patch(port, hostname);
-}
-
-/**
- * Start the specified monitor
- * @param {number} userID ID of user who owns monitor
- * @param {number} monitorID ID of monitor to start
- * @returns {Promise<void>}
- */
-async function startMonitor(userID, monitorID) {
-    await checkOwner(userID, monitorID);
-
-    log.info("manage", `Resume Monitor: ${monitorID} User ID: ${userID}`);
-
-    await R.exec("UPDATE monitor SET active = 1 WHERE id = ? AND user_id = ? ", [monitorID, userID]);
-
-    let monitor = await R.findOne("monitor", " id = ? ", [monitorID]);
-
-    if (monitor.id in server.monitorList) {
-        await server.monitorList[monitor.id].stop();
-    }
-
-    server.monitorList[monitor.id] = monitor;
-    await monitor.start(io);
-}
-
-/**
- * Restart a given monitor
- * @param {number} userID ID of user who owns monitor
- * @param {number} monitorID ID of monitor to start
- * @returns {Promise<void>}
- */
-async function restartMonitor(userID, monitorID) {
-    return await startMonitor(userID, monitorID);
-}
-
-/**
- * Pause a given monitor
- * @param {number} userID ID of user who owns monitor
- * @param {number} monitorID ID of monitor to start
- * @returns {Promise<void>}
- */
-async function pauseMonitor(userID, monitorID) {
-    await checkOwner(userID, monitorID);
-
-    log.info("manage", `Pause Monitor: ${monitorID} User ID: ${userID}`);
-
-    await R.exec("UPDATE monitor SET active = 0 WHERE id = ? AND user_id = ? ", [monitorID, userID]);
-
-    if (monitorID in server.monitorList) {
-        await server.monitorList[monitorID].stop();
-        server.monitorList[monitorID].active = 0;
-    }
 }
 
 /**

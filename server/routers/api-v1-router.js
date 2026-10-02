@@ -18,6 +18,8 @@ const { tokenAuth } = require("../auth");
 const { UptimeKumaServer } = require("../uptime-kuma-server");
 const { UptimeCalculator } = require("../uptime-calculator");
 const Monitor = require("../model/monitor");
+const monitorService = require("../monitor-service");
+const openApiDocument = require("./openapi.json");
 const { UP, DOWN, PENDING, MAINTENANCE, flipStatus } = require("../../src/util");
 
 const server = UptimeKumaServer.getInstance();
@@ -34,81 +36,183 @@ router.use(express.json({ limit: "1mb" }));
  * computed, so they are deliberately absent.
  */
 const MONITOR_WRITABLE_FIELDS = new Set([
+    // scheduling and identity
     "active",
+    "name",
+    "type",
     "description",
+    "parent",
+    "weight",
+    "interval",
+    "retryInterval",
+    "resendInterval",
+    "maxretries",
+    "timeout",
+    "maxredirects",
+    "packetSize",
+    "packetLoss",
+    "subtype",
+    "ipFamily",
+    "pushToken",
+
+    // target
     "url",
+    "method",
+    "body",
+    "headers",
     "hostname",
     "port",
     "location",
-    "method",
-    "timeout",
-    "interval",
-    "retryInterval",
-    "response_max_length",
-    "maxretries",
-    "resendInterval",
-    "expiryNotification",
-    "invertUpsideDown",
-    "upsideDown",
-    "resendNotification",
-    "packetLoss",
+    "protocol",
     "path",
-    "parent",
-    "weight",
+    "keyword",
+    "invertKeyword",
+    "expectedValue",
+    "jsonPath",
+    "jsonPathOperator",
+    "JSONPath",
+    "httpBodyEncoding",
+    "cacheBust",
+    "domainExpiryNotification",
+    "expiryNotification",
+    "upsideDown",
+    "invertUpsideDown",
+    "resendNotification",
+
+    // http / websocket
+    "wsIgnoreSecWebsocketAcceptHeader",
+    "wsSubprotocol",
     "ignoreSSL",
-    "dnssec",
+    "ignoreTls",
+    "allowSelfSigned",
+    "basic_auth_user",
+    "basic_auth_pass",
+    "bearer_token",
+    "tlsCa",
+    "tlsCert",
+    "tlsKey",
+    "oauth_client_id",
+    "oauth_client_secret",
+    "oauth_auth_method",
+    "oauth_token_url",
+    "oauth_scopes",
+    "oauth_audience",
+    "expectedTlsAlert",
+
+    // response checks
+    "save_response",
+    "save_error_response",
+    "response_max_length",
+    "accepted_statuscodes",
+    "accepted_statuscodes_json",
+
+    // dns
+    "dns_resolve_server",
+    "dns_resolve_type",
     "proto",
-    "dnsResolveServer",
+    "dnssec",
+
+    // dns / ping / tcp
+    "ignoreTls",
+
+    // docker
     "docker_host",
     "docker_container",
     "dockerDaemon",
-    "hostname",
-    "mqttTopic",
-    "mqttPayload",
+
+    // mqtt
     "mqttUsername",
     "mqttPassword",
-    "mqttProtocol",
+    "mqttTopic",
+    "mqttSuccessMessage",
+    "mqttCheckType",
+    "mqttWebsocketPath",
+
+    // sql / radius
+    "databaseConnectionString",
+    "databaseQuery",
+    "authMethod",
+    "authWorkstation",
+    "authDomain",
     "radiusUsername",
     "radiusPassword",
     "radiusSecret",
+    "radiusCalledStationId",
+    "radiusCallingStationId",
     "radiusServer",
     "radiusPort",
-    "rspBufferSize",
+
+    // grpc
+    "grpcUrl",
+    "grpcProtobuf",
+    "grpcServiceName",
+    "grpcMethod",
+    "grpcBody",
+    "grpcMetadata",
+    "grpcEnableTls",
+
+    // kafka
+    "kafkaProducerTopic",
+    "kafkaProducerBrokers",
+    "kafkaProducerAllowAutoTopicCreation",
+    "kafkaProducerSaslOptions",
+    "kafkaProducerMessage",
+    "kafkaProducerSsl",
+
+    // rabbitmq
+    "rabbitmqNodes",
+    "rabbitmqUsername",
+    "rabbitmqPassword",
+
+    // smtp / snmp
+    "smtpSecurity",
+    "snmpVersion",
+    "snmpOid",
+
+    // gamedig / steam / redis / pm2 / system
     "game",
-    "maxBytes",
-    "gamedigUsername",
-    "gamedigPassword",
+    "gamedigGivenPortOnly",
     "gamedigToken",
     "gamedigPort",
     "gamedigServerID",
-    "grpcService",
-    "grpcMethod",
-    "grpcMessage",
-    "grpcPort",
-    "grpcProtoFile",
-    "grpcProtoContent",
-    "keyword",
-    "JSONPath",
-    "expectedValue",
-    "jsonPath",
-    "allowSelfSigned",
+    "maxBytes",
+    "rspBufferSize",
+    "steamCollect",
+    "server",
+    "system_service_name",
+    "manual_status",
+
+    // sftp / ssh
+    "sshUsername",
+    "sshPassword",
+    "sshPrivateKey",
+    "sshPassphrase",
+    "sshAuthMethod",
+    "sftpPath",
+    "sftpPathType",
+
+    // ntp
+    "ntpServer",
+    "ntp_stratum_threshold",
+    "ntp_time_offset_threshold",
+    "ntp_root_dispersion_threshold",
+
+    // conditions
     "condition",
     "conditions",
-    "server",
-    "portNumber",
-    "ntpServer",
-    "steamCollect",
-    "query",
+    "retry_only_on_status_code_failure",
+
+    // real browser
+    "remote_browser",
+    "screenshot_delay",
     "realBrowserService",
     "realBrowserScreenshot",
     "realBrowserRemoteBrowserID",
-    "sftpHost",
-    "sftpPort",
-    "sftpUsername",
-    "sftpPassword",
-    "sftpPath",
-    "sftpPathType",
-    "globalpingOptions",
+
+    // ping advanced
+    "ping_numeric",
+    "ping_count",
+    "ping_per_request_timeout",
 ]);
 
 /**
@@ -133,6 +237,57 @@ function parseId(raw) {
         return null;
     }
     return Number(raw);
+}
+
+/**
+ * Parse `?page=` / `?perPage=` into LIMIT/OFFSET.
+ *
+ * Pages are 1-based. perPage is always capped so a caller cannot ask the
+ * server to materialise an entire table in one response.
+ * @param {express.Request} req Express request
+ * @param {express.Response} res Express response, used to report a bad value
+ * @param {number} defaultPerPage Page size when not supplied
+ * @param {number} maxPerPage Hard ceiling on page size
+ * @returns {?{limit: number, offset: number, page: number, perPage: number}}
+ * Pagination to apply, or null after responding with a 400
+ */
+function parsePagination(req, res, defaultPerPage = 50, maxPerPage = 200) {
+    let page = 1;
+    let perPage = defaultPerPage;
+
+    if (req.query.page !== undefined) {
+        if (!/^[0-9]+$/.test(String(req.query.page)) || Number(req.query.page) < 1) {
+            fail(res, 400, "bad_request", "`page` must be an integer of 1 or greater.");
+            return null;
+        }
+        page = Number(req.query.page);
+    }
+
+    if (req.query.perPage !== undefined) {
+        if (!/^[0-9]+$/.test(String(req.query.perPage)) || Number(req.query.perPage) < 1) {
+            fail(res, 400, "bad_request", "`perPage` must be an integer of 1 or greater.");
+            return null;
+        }
+        perPage = Math.min(Number(req.query.perPage), maxPerPage);
+    }
+
+    return { limit: perPage, offset: (page - 1) * perPage, page, perPage };
+}
+
+/**
+ * Build the standard pagination block for a response body.
+ * @param {{page: number, perPage: number}} pagination Result of parsePagination
+ * @param {number} total Total rows matching the query, across all pages
+ * @returns {object} Pagination metadata
+ */
+function paginationMeta(pagination, total) {
+    return {
+        page: pagination.page,
+        perPage: pagination.perPage,
+        total,
+        totalPages: pagination.perPage > 0 ? Math.ceil(total / pagination.perPage) : 0,
+        hasMore: pagination.offset + pagination.perPage < total,
+    };
 }
 
 /**
@@ -237,161 +392,17 @@ router.get("/api/v1", (req, res) => {
 });
 
 /**
- * OpenAPI description of this API.
+ * Serve the OpenAPI description.
+ *
+ * The document lives in openapi.json so it can be linted, diffed and read
+ * without parsing JS. Served unauthenticated on purpose: it contains no
+ * secrets, and an agent should be able to read it before minting a token.
  * @param {express.Request} req Express request
  * @param {express.Response} res Express response
  * @returns {void}
  */
 router.get("/api/v1/openapi.json", (req, res) => {
-    const scopeParam = (scopes) => ({
-        name: "scopes",
-        in: "query",
-        required: false,
-        schema: {
-            type: "string",
-            enum: scopes,
-            default: scopes[0],
-        },
-        description: `Token scopes required: ${scopes.join(", ")}`,
-    });
-
-    const idPath = {
-        name: "id",
-        in: "path",
-        required: true,
-        schema: { type: "integer" },
-    };
-
-    res.json({
-        openapi: "3.1.0",
-        info: {
-            title: "Flatline API",
-            version: "1.0.0",
-            description: "Monitoring CRUD API for automation and agents. All responses include `ok`.",
-        },
-        components: {
-            securitySchemes: {
-                bearerAuth: {
-                    type: "http",
-                    scheme: "bearer",
-                    description: "API token from Settings > API Keys",
-                },
-            },
-        },
-        security: [ { bearerAuth: [] } ],
-        paths: {
-            "/api/v1/monitors": {
-                get: {
-                    summary: "List monitors",
-                    description: "Requires the `read` scope. Supports `?status=up|down|pending|maintenance` and `?tag=<id>`.",
-                    parameters: [
-                        { name: "status", in: "query", schema: { type: "string", enum: [ "up", "down", "pending", "maintenance" ] } },
-                        { name: "tag", in: "query", schema: { type: "integer" } },
-                    ],
-                    responses: { 200: { description: "Array of monitors" } },
-                },
-                post: {
-                    summary: "Create a monitor",
-                    description: "Requires the `write` scope. Send `type` plus the fields that type needs; see GET /api/v1/monitor-types.",
-                    requestBody: {
-                        required: true,
-                        content: { "application/json": { schema: { type: "object" } } },
-                    },
-                    responses: { 201: { description: "Created monitor" } },
-                },
-            },
-            "/api/v1/monitors/{id}": {
-                get: {
-                    summary: "Get one monitor",
-                    description: "Requires the `read` scope.",
-                    parameters: [ idPath ],
-                    responses: { 200: { description: "Monitor" }, 404: { description: "Not found" } },
-                },
-                patch: {
-                    summary: "Update a monitor",
-                    description: "Requires the `write` scope. Only the supplied fields are changed.",
-                    parameters: [ idPath ],
-                    requestBody: {
-                        required: true,
-                        content: { "application/json": { schema: { type: "object" } } },
-                    },
-                    responses: { 200: { description: "Updated monitor" } },
-                },
-                delete: {
-                    summary: "Delete a monitor",
-                    description: "Requires the `write` scope.",
-                    parameters: [ idPath ],
-                    responses: { 200: { description: "Deleted" } },
-                },
-            },
-            "/api/v1/monitors/{id}/heartbeats": {
-                get: {
-                    summary: "Recent heartbeats",
-                    description: "Requires the `read` scope. `?limit` defaults to 100, max 1000.",
-                    parameters: [ idPath, scopeParam([ "read" ]), { name: "limit", in: "query", schema: { type: "integer", default: 100, maximum: 1000 } } ],
-                    responses: { 200: { description: "Array of heartbeats, newest first" } },
-                },
-            },
-            "/api/v1/monitor-types": {
-                get: {
-                    summary: "Supported monitor types and their fields",
-                    description: "Requires the `read` scope. Use this to discover valid `type` values and required fields for POST /api/v1/monitors.",
-                    responses: { 200: { description: "Monitor type definitions" } },
-                },
-            },
-            "/api/v1/incidents": {
-                get: {
-                    summary: "List incidents",
-                    description: "Requires the `read` scope.",
-                    responses: { 200: { description: "Array of incidents" } },
-                },
-                post: {
-                    summary: "Open an incident",
-                    description: "Requires the `write` scope. Send `monitorIds` (array), `title`, and `content`.",
-                    requestBody: {
-                        required: true,
-                        content: { "application/json": { schema: { type: "object" } } },
-                    },
-                    responses: { 201: { description: "Created incident" } },
-                },
-            },
-            "/api/v1/status-pages": {
-                get: {
-                    summary: "List status pages",
-                    description: "Requires the `read` scope.",
-                    responses: { 200: { description: "Array of status pages" } },
-                },
-            },
-            "/api/v1/maintenance": {
-                get: {
-                    summary: "List maintenance windows",
-                    description: "Requires the `read` scope.",
-                    responses: { 200: { description: "Array of maintenance windows" } },
-                },
-            },
-            "/api/v1/tags": {
-                get: {
-                    summary: "List tags",
-                    description: "Requires the `read` scope.",
-                    responses: { 200: { description: "Array of tags" } },
-                },
-            },
-            "/api/v1/notifications": {
-                get: {
-                    summary: "List notification configs",
-                    description: "Requires the `read` scope. Secrets are redacted; only `telegram` is supported.",
-                    responses: { 200: { description: "Array of notifications" } },
-                },
-            },
-            "/api/v1/health": {
-                get: {
-                    summary: "Aggregate health summary",
-                    description: "Requires the `read` scope. Counts of up/down/pending/paused across all monitors.",
-                    responses: { 200: { description: "Health summary" } },
-                },
-            },
-        },
-    });
+    res.type("application/json").send(openApiDocument);
 });
 
 // ---------------------------------------------------------------------------
@@ -406,8 +417,13 @@ router.get("/api/v1/openapi.json", (req, res) => {
  */
 router.get("/api/v1/monitors", tokenAuth("read"), async (req, res) => {
     try {
-        let query = "SELECT id FROM monitor WHERE user_id = ? ";
-        let params = [ req.apiUser ];
+        const pagination = parsePagination(req, res);
+        if (!pagination) {
+            return;
+        }
+
+        const where = [ "user_id = ?" ];
+        const params = [ req.apiUser ];
 
         if (req.query.tag !== undefined) {
             const tagID = parseId(req.query.tag);
@@ -415,11 +431,37 @@ router.get("/api/v1/monitors", tokenAuth("read"), async (req, res) => {
                 fail(res, 400, "bad_request", "tag must be a positive integer.");
                 return;
             }
-            query += "AND id IN (SELECT monitor_id FROM monitor_tag WHERE tag_id = ?) ";
+            where.push("id IN (SELECT monitor_id FROM monitor_tag WHERE tag_id = ?)");
             params.push(tagID);
         }
 
-        const rows = await R.getAll(query, params);
+        if (req.query.active !== undefined) {
+            if (req.query.active !== "true" && req.query.active !== "false") {
+                fail(res, 400, "bad_request", "`active` must be true or false.");
+                return;
+            }
+            where.push("active = ?");
+            params.push(req.query.active === "true" ? 1 : 0);
+        }
+
+        if (req.query.q !== undefined) {
+            where.push("(name LIKE ? OR url LIKE ?)");
+            const like = `%${String(req.query.q).slice(0, 100)}%`;
+            params.push(like, like);
+        }
+
+        const whereSQL = ` WHERE ${where.join(" AND ")}`;
+
+        const { total } = await R.getRow(`SELECT COUNT(*) AS total FROM monitor${whereSQL}`, params);
+
+        // LIMIT/OFFSET are already-validated integers. R.getAll does not bind
+        // them portably and this project supports both SQLite and MariaDB.
+        // R.getAll returns plain rows; toPublicJSON/toJSON live on the Monitor
+        // model, so re-hydrate each row before serialising.
+        const rows = await R.getAll(
+            `SELECT id FROM monitor${whereSQL} ORDER BY id LIMIT ${pagination.limit} OFFSET ${pagination.offset}`,
+            params
+        );
 
         const result = [];
         for (const row of rows) {
@@ -429,7 +471,8 @@ router.get("/api/v1/monitors", tokenAuth("read"), async (req, res) => {
             }
             const obj = await monitorToJSON(monitor);
 
-            // Optional status filter, applied after resolving live status.
+            // Status depends on the latest heartbeat, so it is filtered after
+            // resolution rather than in SQL.
             if (req.query.status && obj.status !== req.query.status) {
                 continue;
             }
@@ -437,7 +480,12 @@ router.get("/api/v1/monitors", tokenAuth("read"), async (req, res) => {
             result.push(obj);
         }
 
-        res.json({ ok: true, count: result.length, monitors: result });
+        res.json({
+            ok: true,
+            count: result.length,
+            monitors: result,
+            pagination: paginationMeta(pagination, Number(total)),
+        });
     } catch (e) {
         log.error("api-v1", `GET /monitors failed: ${e.message}`);
         fail(res, 500, "server_error", e.message);
@@ -474,52 +522,41 @@ router.post("/api/v1/monitors", tokenAuth("write"), async (req, res) => {
             return;
         }
 
-        const monitorBean = R.dispense("monitor");
-        monitorBean.user_id = req.apiUser;
-        monitorBean.name = body.name;
-        monitorBean.type = body.type;
-
-        // Copy through only real columns, so an unknown key in the agent's
-        // payload is ignored instead of becoming an undefined field.
-        const writableFields = MONITOR_WRITABLE_FIELDS;
+        // Copy through only allowed columns, so an unknown key in the agent's
+        // payload is ignored instead of becoming a phantom field. Ownership is
+        // supplied by the service, never the body.
+        const payload = {};
         const rejected = [];
 
         for (const [ key, value ] of Object.entries(body)) {
+            if (key === "notificationIDList") {
+                continue;
+            }
             if (key === "name" || key === "type") {
                 continue;
             }
-            if (writableFields.has(key)) {
-                monitorBean[key] = value;
+            if (MONITOR_WRITABLE_FIELDS.has(key)) {
+                payload[key] = value;
             } else {
                 rejected.push(key);
             }
         }
 
-        monitorBean.active = body.active ?? true;
-        monitorBean.interval = body.interval ?? 20;
-        monitorBean.maxretries = body.maxretries ?? 0;
-        // The column defaults to 0 but validate() rejects anything below 1,
-        // and the UI applies the same "0 means unset" fixup on submit.
-        monitorBean.retryInterval = body.retryInterval || monitorBean.interval;
-        monitorBean.timeout = body.timeout || Math.floor((monitorBean.interval * 8) / 10);
-
-        // Reuse the model's own validation so the API cannot store a monitor
-        // the UI would have refused (e.g. interval below the floor).
-        monitorBean.validate();
-
-        await R.store(monitorBean);
-
-        // Echo back any ignored keys so a caller can correct its payload.
         if (rejected.length > 0) {
             log.warn("api-v1", `POST /monitors ignored unknown fields: ${rejected.join(", ")}`);
         }
 
-        // Register with the scheduler and start checking immediately, matching
-        // what startMonitor() does for the UI path.
-        server.monitorList[monitorBean.id] = monitorBean;
-        if (monitorBean.active) {
-            await monitorBean.start(server.io);
-        }
+        const monitorBean = await monitorService.createMonitor(req.apiUser, {
+            ...payload,
+            name: body.name,
+            type: body.type,
+            active: body.active ?? true,
+            interval: body.interval ?? 20,
+            maxretries: body.maxretries ?? 0,
+        }, {
+            start: true,
+            notificationIDList: body.notificationIDList ?? null,
+        });
 
         // Push the change to any connected UI so it appears without a refresh.
         server.io.to(req.apiUser).emit("monitorList", await server.getMonitorJSONList(req.apiUser));
@@ -582,44 +619,47 @@ router.patch("/api/v1/monitors/:id", tokenAuth("write"), async (req, res) => {
             return;
         }
 
+        const payload = {};
         const rejected = [];
 
         for (const [ key, value ] of Object.entries(body)) {
-            if (key === "name" || key === "type") {
+            if (key === "notificationIDList") {
+                continue;
+            }
+            if (key === "type") {
+                continue;
+            }
+            if (key === "name") {
+                payload.name = value;
                 continue;
             }
             if (MONITOR_WRITABLE_FIELDS.has(key)) {
-                monitor[key] = value;
+                payload[key] = value;
             } else {
                 rejected.push(key);
             }
         }
 
-        // Re-run the model's validation against the merged values.
-        monitor.validate();
-
-        await R.store(monitor);
-
-        // The scheduler holds its own monitor object, so restart it for the
-        // new values to take effect.
-        if (monitor.active) {
-            const running = server.monitorList[monitor.id];
-            if (running) {
-                await running.stop();
-            }
-            server.monitorList[monitor.id] = monitor;
-            await monitor.start(server.io);
-        }
+        // Only keys present in the payload are written, so a partial PATCH
+        // leaves every other field untouched.
+        const updated = await monitorService.updateMonitor(req.apiUser, monitor.id, payload, {
+            notificationIDList: body.notificationIDList ?? null,
+        });
 
         server.io.to(req.apiUser).emit("monitorList", await server.getMonitorJSONList(req.apiUser));
 
         res.json({
             ok: true,
-            monitor: await monitorToJSON(monitor),
+            monitor: await monitorToJSON(updated),
             ignoredFields: rejected,
         });
     } catch (e) {
         log.error("api-v1", `PATCH /monitors/:id failed: ${e.message}`);
+        // A rejected group topology is the caller's mistake, not a server fault.
+        if (e.message === "Invalid Monitor Group") {
+            fail(res, 400, "bad_request", e.message);
+            return;
+        }
         fail(res, 500, "server_error", e.message);
     }
 });
@@ -637,12 +677,17 @@ router.delete("/api/v1/monitors/:id", tokenAuth("write"), async (req, res) => {
             return;
         }
 
-        await Monitor.deleteMonitor(monitor.id, req.apiUser);
+        // Group semantics match the UI: ?deleteChildren=true removes descendants,
+        // otherwise they are unlinked and kept.
+        const deleteChildren = req.query.deleteChildren === "true";
 
-        server.io.to(req.apiUser).emit("deleteMonitor", monitor.id);
-        server.io.to(req.apiUser).emit("deleteMonitorFromList", monitor.id);
+        const deleted = await monitorService.deleteMonitor(req.apiUser, monitor.id, deleteChildren);
 
-        res.json({ ok: true, deleted: monitor.id });
+        for (const id of deleted) {
+            server.io.to(req.apiUser).emit("deleteMonitorFromList", id);
+        }
+
+        res.json({ ok: true, deleted, count: deleted.length });
     } catch (e) {
         log.error("api-v1", `DELETE /monitors/:id failed: ${e.message}`);
         fail(res, 500, "server_error", e.message);
@@ -662,6 +707,8 @@ router.get("/api/v1/monitors/:id/heartbeats", tokenAuth("read"), async (req, res
             return;
         }
 
+        // Heartbeats are high-volume, so this endpoint keeps a simple `limit`
+        // rather than full pagination, but still reports the true total.
         let limit = 100;
         if (req.query.limit !== undefined) {
             if (!/^[0-9]+$/.test(String(req.query.limit))) {
@@ -671,9 +718,14 @@ router.get("/api/v1/monitors/:id/heartbeats", tokenAuth("read"), async (req, res
             limit = Math.min(Number(req.query.limit), 1000);
         }
 
+        const { total } = await R.getRow(
+            "SELECT COUNT(*) AS total FROM heartbeat WHERE monitor_id = ?",
+            [ monitor.id ]
+        );
+
         const heartbeats = await R.getAll(
-            "SELECT * FROM heartbeat WHERE monitor_id = ? ORDER BY id DESC LIMIT ?",
-            [ monitor.id, limit ]
+            `SELECT * FROM heartbeat WHERE monitor_id = ? ORDER BY id DESC LIMIT ${limit}`,
+            [ monitor.id ]
         );
 
         res.json({
@@ -687,6 +739,8 @@ router.get("/api/v1/monitors/:id/heartbeats", tokenAuth("read"), async (req, res
                 msg: h.msg,
                 important: !!h.important,
             })),
+            total: Number(total),
+            limit,
         });
     } catch (e) {
         log.error("api-v1", `GET /heartbeats failed: ${e.message}`);
@@ -841,20 +895,53 @@ router.get("/api/v1/monitor-types", tokenAuth("read"), async (req, res) => {
  */
 router.get("/api/v1/incidents", tokenAuth("read"), async (req, res) => {
     try {
+        const pagination = parsePagination(req, res);
+        if (!pagination) {
+            return;
+        }
+
         // Incidents belong to a status page and status pages are shared (no
-        // user_id column), so this returns every page's incidents, matching
-        // what the UI can see.
-        const incidents = await R.getAll(
+        // user_id column), so this spans every page, matching what the UI sees.
+        const where = [];
+        const params = [];
+
+        if (req.query.statusPageId !== undefined) {
+            const statusPageID = parseId(req.query.statusPageId);
+            if (statusPageID === null) {
+                fail(res, 400, "bad_request", "statusPageId must be a positive integer.");
+                return;
+            }
+            where.push("incident.status_page_id = ?");
+            params.push(statusPageID);
+        }
+
+        if (req.query.active !== undefined) {
+            if (req.query.active !== "true" && req.query.active !== "false") {
+                fail(res, 400, "bad_request", "`active` must be true or false.");
+                return;
+            }
+            where.push("incident.active = ?");
+            params.push(req.query.active === "true" ? 1 : 0);
+        }
+
+        const whereSQL = where.length > 0 ? ` WHERE ${where.join(" AND ")}` : "";
+
+        const { total } = await R.getRow(`SELECT COUNT(*) AS total FROM incident${whereSQL}`, params);
+
+        // LIMIT/OFFSET are already-validated integers; R.getAll does not bind
+        // them portably and this project supports SQLite and MariaDB.
+        const rows = await R.getAll(
             `SELECT incident.* FROM incident
-             JOIN status_page ON incident.status_page_id = status_page.id
+             JOIN status_page ON incident.status_page_id = status_page.id${whereSQL}
              ORDER BY incident.id DESC
-             LIMIT 200`
+             LIMIT ${pagination.limit} OFFSET ${pagination.offset}`,
+            params
         );
 
         res.json({
             ok: true,
-            count: incidents.length,
-            incidents: incidents.map((i) => ({
+            count: rows.length,
+            incidents: rows.map((i) => ({
                 id: i.id,
                 statusPageId: i.status_page_id,
                 title: i.title,
@@ -865,6 +952,7 @@ router.get("/api/v1/incidents", tokenAuth("read"), async (req, res) => {
                 createdDate: i.created_date,
                 lastUpdatedDate: i.last_updated_date,
             })),
+            pagination: paginationMeta(pagination, Number(total)),
         });
     } catch (e) {
         log.error("api-v1", `GET /incidents failed: ${e.message}`);
