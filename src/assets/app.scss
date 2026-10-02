@@ -179,7 +179,7 @@ optgroup {
 }
 
 .btn-dark {
-    background-color: #161b22;
+    background-color: $dark-header-bg;
 }
 
 .btn-outline-normal {
@@ -329,7 +329,7 @@ optgroup {
     }
 
     .table-hover > tbody > tr:hover > * {
-        --bs-table-accent-bg: #070a10;
+        --bs-table-accent-bg: $dark-bg2;
         color: $dark-font-color;
     }
 

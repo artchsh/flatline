@@ -1,10 +1,11 @@
 {
-    "name": "uptime-kuma",
+    "name": "flatline",
     "version": "3.0.0-beta.0",
     "license": "MIT",
     "repository": {
         "type": "git",
-        "url": "https://github.com/louislam/uptime-kuma.git"
+        "url": "https://github.com/artchsh/flatline.git",
+        "directory": "."
     },
     "engines": {
         "node": ">= 26.2.0"
@@ -34,11 +35,11 @@
         "playwright-codegen": "playwright codegen localhost:3000 --save-storage=./private/e2e-auth.json",
         "playwright-show-report": "playwright show-report ./private/playwright-report",
         "vite-preview-dist": "vite preview --host",
-        "build-docker-base": "docker buildx build -f docker/debian-base.dockerfile --platform linux/amd64,linux/arm64 -t louislam/uptime-kuma:base3 --target base3 . --push",
-        "build-docker-base-slim": "docker buildx build -f docker/debian-base.dockerfile --platform linux/amd64,linux/arm64 -t louislam/uptime-kuma:base3-slim --target base3-slim . --push",
-        "build-docker-builder-go": "docker buildx build -f docker/builder-go.dockerfile --platform linux/amd64,linux/arm64 -t louislam/uptime-kuma:builder-go3 . --push",
-        "build-docker-nightly-local": "node --run build && docker build -f docker/dockerfile -t louislam/uptime-kuma:nightly3 --target nightly .",
-        "build-docker-pr-test": "docker buildx build -f docker/dockerfile --platform linux/amd64,linux/arm64 -t louislam/uptime-kuma:pr-test3 --target pr-test3 . --push",
+        "build-docker-base": "docker buildx build -f docker/debian-base.dockerfile --platform linux/amd64,linux/arm64 -t artchsh/flatline:base . --target base3 . --push",
+        "build-docker-base-slim": "docker buildx build -f docker/debian-base.dockerfile --platform linux/amd64,linux/arm64 -t artchsh/flatline:base-slim . --target base3-slim . --push",
+        "build-docker-builder-go": "docker buildx build -f docker/builder-go.dockerfile --platform linux/amd64,linux/arm64 -t artchsh/flatline:builder . --push",
+        "build-docker-nightly-local": "node --run build && docker build -f docker/dockerfile -t artchsh/flatline:1 --target nightly .",
+        "build-docker-pr-test": "docker buildx build -f docker/dockerfile --platform linux/amd64,linux/arm64 -t artchsh/flatline:pr-test . --target pr-test3 . --push",
         "upload-artifacts": "node extra/release/upload-artifacts.mjs",
         "upload-artifacts-beta": "node extra/release/upload-artifacts-beta.mjs",
         "setup": "git checkout 2.5.4 && npm ci --omit dev --no-audit && npm run download-dist",
@@ -59,7 +60,7 @@
         "build-dist-and-restart": "node --run build && node --run start-server-dev",
         "start-pr-test": "node extra/checkout-pr.mjs && npm install && node --run dev",
         "deploy-demo-server": "node extra/deploy-demo-server.js",
-        "quick-run-nightly": "docker run --rm --env NODE_ENV=development -p 3001:3001 louislam/uptime-kuma:nightly3",
+        "quick-run-nightly": "docker run --rm --env NODE_ENV=development -p 3001:3001 artchsh/flatline:1",
         "start-dev-container": "cd docker && docker-compose -f docker-compose-dev.yml up --force-recreate",
         "reset-migrate-aggregate-table-state": "node extra/reset-migrate-aggregate-table-state.js",
         "generate-changelog": "node ./extra/release/generate-changelog.mjs",
@@ -249,5 +250,15 @@
         "vue-demi@0.12.5": true,
         "esbuild@0.28.2": true,
         "@parcel/watcher@2.5.6": true
-    }
+    },
+    "description": "Self-hosted uptime monitoring with Telegram alerts and an agent-friendly REST API.",
+    "homepage": "https://github.com/artchsh/flatline",
+    "keywords": [
+        "uptime",
+        "monitoring",
+        "flatline",
+        "telegram",
+        "self-hosted",
+        "status-page"
+    ]
 }

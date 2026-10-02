@@ -699,18 +699,18 @@ export default {
         }
 
         &.text-danger {
-            color: #dc3545;
+            color: #e5484d;
 
             .dark & {
-                color: #dc3545;
+                color: #e5484d;
             }
 
             &:hover {
-                background-color: #dc3545 !important;
+                background-color: #e5484d !important;
                 color: white !important;
 
                 .dark & {
-                    background-color: #dc3545 !important;
+                    background-color: #e5484d !important;
                     color: white !important;
                 }
 

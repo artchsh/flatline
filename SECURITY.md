@@ -1,47 +1,39 @@
 # Security Policy
 
-> [!CAUTION]
-> Unfortunately, AI slop reports keep wasting my time. It will be closed and you will get banned immediately if you try to do that.
+Flatline is a self-hosted, single-owner deployment. There is no public bug bounty and no
+supported-versions table.
 
-## Reporting a Vulnerability
+## Reporting a vulnerability
 
-1. Please report security issues to
-   <https://github.com/louislam/uptime-kuma/security/advisories/new>.
-2. Please also create an empty security issue to alert me, as GitHub Advisories
-   do not send a notification, I probably will miss it without this.
-   <https://github.com/louislam/uptime-kuma/issues/new?assignees=&labels=help&template=security.md>
+Open a private security advisory on this repository rather than a public issue.
 
-- Do not report any upstream dependency issues / scan result by any tools. It will be closed immediately without explanations. Unless you have PoC to prove that the upstream issue affected Uptime Kuma.
-- Do not use the public issue tracker or discuss it in public as it will cause
-  more damage.
-- Do not report any SSRF issues.
+Please include:
 
-## Do you accept other 3rd-party bug bounty platforms?
+- what the issue is and what an attacker gains
+- steps to reproduce, or a proof of concept
+- the Flatline version (`docker logs flatline | head -1`, or the About page)
 
-At this moment, I DO NOT accept other bug bounty platforms, because I am not
-familiar with these platforms and someone has tried to send a phishing link to
-me by doing this already. To minimize my own risk, please report through GitHub
-Advisories only. I will ignore all 3rd-party bug bounty platforms emails.
+## Scope
 
-## Supported Versions
+In scope:
 
-### Uptime Kuma Versions
+- authentication bypass, or reaching another user's monitors, notifications or API tokens
+- privilege escalation between users
+- anything that lets an unauthenticated caller read or change data
+- SQL injection or path traversal in the API or upload handling
 
-You should use or upgrade to the latest version of Uptime Kuma.
-All versions are upgradable to the latest version.
+Out of scope:
 
-### Upgradable Docker Tags
+- upstream Uptime Kuma vulnerabilities. Report those to
+  [louislam/uptime-kuma](https://github.com/louislam/uptime-kuma/security/advisories/new)
+- missing hardening you are not able to demonstrate
+- findings from automated scanners with no working exploit
 
-| Tag             | Supported                                                                             |
-| --------------- | ------------------------------------------------------------------------------------- |
-| 2               | :white_check_mark:                                                                    |
-| 2-slim          | :white_check_mark:                                                                    |
-| next            | :white_check_mark:                                                                    |
-| next-slim       | :white_check_mark:                                                                    |
-| 2-rootless      | :white_check_mark:                                                                    |
-| 2-slim-rootless | :white_check_mark:                                                                    |
-| 1               | [⚠️ Deprecated](https://github.com/louislam/uptime-kuma/wiki/Migration-From-v1-To-v2) |
-| 1-debian        | [⚠️ Deprecated](https://github.com/louislam/uptime-kuma/wiki/Migration-From-v1-To-v2) |
-| latest          | [⚠️ Deprecated](https://github.com/louislam/uptime-kuma/wiki/Migration-From-v1-To-v2) |
-| debian          | [⚠️ Deprecated](https://github.com/louislam/uptime-kuma/wiki/Migration-From-v1-To-v2) |
-| All other tags  | ❌                                                                                    |
+## Deploying safely
+
+- Put the instance behind HTTPS. API tokens are bearer credentials sent in a header.
+- Give agents a token scoped to `read` only unless they genuinely need to mutate monitors.
+- Invite links are single-use and expire, but treat an unused one as a live secret until it is
+  redeemed or revoked.
+- Back up `./data`. The SQLite database holds API token hashes, notification bot tokens and
+  invite hashes.

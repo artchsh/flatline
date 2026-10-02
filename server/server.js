@@ -1,5 +1,5 @@
 /*
- * Uptime Kuma Server
+ * Flatline server
  * node "server/server.js"
  * DO NOT require("./server") in other modules, it likely creates circular dependency!
  */
@@ -10,7 +10,7 @@ import { betterAuthSocketHandler } from "./socket-handlers/better-auth-socket-ha
 import { loadEnvFile } from "node:process";
 import * as fs from "node:fs";
 
-console.log("Welcome to Uptime Kuma");
+console.log("Welcome to Flatline");
 
 // As the log function need to use dayjs, it should be very top
 const dayjs = require("dayjs");
@@ -37,7 +37,7 @@ const requiredNodeVersionsComma = requiredNodeVersions
     .map((version) => version.trim())
     .join(", ");
 
-// Exit Uptime Kuma immediately if the Node.js version is banned
+// Exit Flatline immediately if the Node.js version is banned
 if (semver.satisfies(nodeVersion, bannedNodeVersions)) {
     console.error(
         "\x1b[31m%s\x1b[0m",
@@ -57,7 +57,7 @@ if (!semver.satisfies(nodeVersion, requiredNodeVersions)) {
 const args = require("args-parser")(process.argv);
 const config = require("./config");
 
-process.title = "uptime-kuma";
+process.title = "flatline";
 
 log.debug("server", "Arguments");
 log.debug("server", args);
@@ -96,7 +96,7 @@ if (isDev || process.env.UPTIME_KUMA_DEBUG_INSPECTOR === "1") {
 }
 
 const checkVersion = require("./check-version");
-log.info("server", "Uptime Kuma Version:", checkVersion.version);
+log.info("server", "Flatline version:", checkVersion.version);
 
 log.info("server", "Loading modules");
 
@@ -347,7 +347,7 @@ app.use(function (req, res, next) {
     app.use("/upload", express.static(Database.uploadDir));
 
     app.get("/.well-known/change-password", async (_, response) => {
-        response.redirect("https://github.com/louislam/uptime-kuma/wiki/Reset-Password-via-CLI");
+        response.redirect("https://github.com/artchsh/flatline/wiki/Reset-Password-via-CLI");
     });
 
     // API Router
@@ -1350,7 +1350,7 @@ gracefulShutdown(server.httpServer, {
 let unexpectedErrorHandler = (error, promise) => {
     console.trace(error);
     UptimeKumaServer.errorLog(error, false);
-    console.error("If you keep encountering errors, please report to https://github.com/louislam/uptime-kuma/issues");
+    console.error("If you keep encountering errors, please report to https://github.com/artchsh/flatline/issues");
 };
 process.addListener("unhandledRejection", unexpectedErrorHandler);
 process.addListener("uncaughtException", unexpectedErrorHandler);

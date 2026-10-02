@@ -560,11 +560,12 @@ export default {
             const rootStyles = getComputedStyle(document.documentElement);
             const canvasStyles = getComputedStyle(canvas.parentElement);
             const colors = {
-                empty: canvasStyles.getPropertyValue("--beat-empty-color") || "#f0f8ff",
-                down: rootStyles.getPropertyValue("--bs-danger") || "#dc3545",
-                pending: rootStyles.getPropertyValue("--bs-warning") || "#ffc107",
-                maintenance: rootStyles.getPropertyValue("--maintenance") || "#1d4ed8",
-                up: rootStyles.getPropertyValue("--bs-primary") || "#5cdd8b",
+                // Fallbacks mirror src/assets/vars.scss.
+                empty: canvasStyles.getPropertyValue("--beat-empty-color") || "#e8e4de",
+                down: rootStyles.getPropertyValue("--bs-danger") || "#e5484d",
+                pending: rootStyles.getPropertyValue("--bs-warning") || "#f0c54b",
+                maintenance: rootStyles.getPropertyValue("--maintenance") || "#4c8dff",
+                up: rootStyles.getPropertyValue("--bs-primary") || "#ff4d2e",
             };
 
             // Draw each beat

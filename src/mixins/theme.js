@@ -99,10 +99,11 @@ export default {
          * @returns {void}
          */
         updateThemeColorMeta() {
+            // Must stay in step with src/assets/vars.scss.
             if (this.theme === "dark") {
-                document.querySelector("#theme-color").setAttribute("content", "#161B22");
+                document.querySelector("#theme-color").setAttribute("content", "#161618");
             } else {
-                document.querySelector("#theme-color").setAttribute("content", "#5cdd8b");
+                document.querySelector("#theme-color").setAttribute("content", "#ff4d2e");
             }
         },
     },

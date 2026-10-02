@@ -572,7 +572,7 @@
                 <p v-if="config.showPoweredBy" data-testid="powered-by">
                     {{ $t("Powered by") }}
                     <a target="_blank" rel="noopener noreferrer" href="https://github.com/louislam/uptime-kuma">
-                        {{ $t("Uptime Kuma") }}
+                        {{ $t("Flatline") }}
                     </a>
                 </p>
 
@@ -1707,7 +1707,7 @@ footer {
 }
 
 .dark .shadow-box {
-    background-color: #0d1117;
+    background-color: $dark-bg;
 }
 
 .status-maintenance {
@@ -1756,7 +1756,7 @@ footer {
             outline: none;
 
             &::placeholder {
-                color: #1d2634;
+                color: $dark-border-color;
             }
         }
     }

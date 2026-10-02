@@ -43,7 +43,7 @@ export async function createBetterAuthRouter() {
             try {
                 if (!(await needSetup())) {
                     throw new Error(
-                        "Uptime Kuma has been initialized. If you want to run setup again, please delete the database."
+                        "Flatline has already been set up. To run setup again, delete the database."
                     );
                 }
                 processingSetup = true;

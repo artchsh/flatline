@@ -1,205 +1,132 @@
 <div align="center" width="100%">
-    <img src="./public/icon.svg" width="128" alt="Uptime Kuma Logo" />
+    <img src="./public/icon.svg" width="128" alt="Flatline Logo" />
 </div>
 
-# Uptime Kuma
+# Flatline
 
-Uptime Kuma is an easy-to-use self-hosted monitoring tool.
+Self-hosted uptime monitoring with Telegram alerts and an agent-friendly REST API.
 
-<a target="_blank" href="https://github.com/louislam/uptime-kuma"><img src="https://img.shields.io/github/stars/louislam/uptime-kuma?style=flat" /></a> <a target="_blank" href="https://hub.docker.com/r/louislam/uptime-kuma"><img src="https://img.shields.io/docker/pulls/louislam/uptime-kuma" /></a> <a target="_blank" href="https://hub.docker.com/r/louislam/uptime-kuma"><img src="https://img.shields.io/docker/v/louislam/uptime-kuma/2?label=docker%20image%20ver." /></a> <a target="_blank" href="https://github.com/louislam/uptime-kuma"><img src="https://img.shields.io/github/last-commit/louislam/uptime-kuma" /></a> <a target="_blank" href="https://opencollective.com/uptime-kuma"><img src="https://opencollective.com/uptime-kuma/total/badge.svg?label=Open%20Collective%20Backers&color=brightgreen" /></a>
-[![GitHub Sponsors](https://img.shields.io/github/sponsors/louislam?label=GitHub%20Sponsors)](https://github.com/sponsors/louislam) <a href="https://weblate.kuma.pet/projects/uptime-kuma/uptime-kuma/">
-<img src="https://weblate.kuma.pet/widgets/uptime-kuma/-/svg-badge.svg" alt="Translation status" />
-</a>
+A fork of [Uptime Kuma](https://github.com/louislam/uptime-kuma) (MIT), trimmed down to what a
+small team actually uses and extended where it fell short. See [FORK-ROADMAP.md](./FORK-ROADMAP.md)
+for the full list of changes.
 
-<img src="https://user-images.githubusercontent.com/1336778/212262296-e6205815-ad62-488c-83ec-a5b0d0689f7c.jpg" width="700" alt="Uptime Kuma Dashboard Screenshot" />
+## What is different from upstream
 
-## 🥔 Live Demo
+- **Telegram only.** All 108 other notification providers were removed, along with the Webpush
+  service worker and its VAPID infrastructure. Fewer moving parts, one way to be paged.
+- **Multiple real users.** Upstream supports several accounts but they cannot be created after
+  setup. Flatline adds admin-issued, single-use invite links: mint a link, send it over any channel
+  you already trust, the recipient picks their own password. No email required, no signup form.
+- **REST API v1.** Everything the UI does over Socket.IO is available over HTTP with bearer-token
+  auth and per-token `read` / `write` scopes, so scripts and LLM agents can drive it.
+  `GET /api/v1/openapi.json` documents itself.
+- **Per-user ownership enforced.** Upstream trusts whatever id the browser sends; several socket
+  handlers would let any logged-in user read or delete another user's monitors. Every such path is
+  now guarded.
+- **Flatline branding.** Hot-orange accent on warm near-black, following the palette of
+  [1410666.xyz](https://1410666.xyz).
 
-Try it!
-
-Demo Server (Location: Frankfurt - Germany): <https://demo.kuma.pet/start-demo>
-
-It is a temporary live demo, all data will be deleted after 10 minutes. Sponsored by [Uptime Kuma Sponsors](https://github.com/louislam/uptime-kuma#%EF%B8%8F-sponsors).
+Upstream keeps everything it has: HTTP(s)/TCP/DNS/Ping/Push/Steam/Docker/SFTP/NTP/Postgres/Redis
+and more monitor types, status pages, maintenance windows, proxy support, 2FA, and the ping charts.
 
 ## ⭐ Features
 
-- Monitoring uptime for HTTP(s) / TCP / HTTP(s) Keyword / HTTP(s) Json Query / Websocket / Ping / DNS Record / Push / Steam Game Server / Docker Containers
-- Fancy, Reactive, Fast UI/UX
-- Notifications via Telegram, Discord, Gotify, Slack, Pushover, Email (SMTP), and [90+ notification services, click here for the full list](https://github.com/louislam/uptime-kuma/tree/master/src/components/notifications)
+- Monitoring for HTTP(s), TCP, HTTP(s) Keyword, HTTP(s) Json Query, Websocket, Ping, DNS Record,
+  Push, Steam Game Server, Docker Containers, gRPC, MQTT, PostgreSQL, MySQL, MS SQL, MongoDB,
+  Redis, RabbitMQ, Kafka, SFTP, NTP, Oracle DB and more
+- Telegram notifications with templates and MarkdownV2
+- REST API v1 with token scopes and a self-describing OpenAPI document
+- Multi-user with single-use invite links
+- Multiple status pages, maintenance windows, tags, proxy support, 2FA
 - 20-second intervals
-- [Multi Languages](https://github.com/louislam/uptime-kuma/tree/master/src/lang)
-- Multiple status pages
-- Map status pages to specific domains
-- Ping chart
-- Certificate info
-- Proxy support
-- 2FA support
+- [80+ languages](./src/lang)
 
 ## 🔧 How to Install
 
 ### 🐳 Docker Compose
 
 ```bash
-mkdir uptime-kuma
-cd uptime-kuma
-curl -o compose.yaml https://raw.githubusercontent.com/louislam/uptime-kuma/master/compose.yaml
+mkdir flatline && cd flatline
 docker compose up -d
 ```
 
-Uptime Kuma is now running on all network interfaces (e.g. http://localhost:3001 or http://your-ip:3001).
+Or use the example file directly:
 
-> [!WARNING]
-> File Systems like **NFS** (Network File System) are **NOT** supported. Please map to a local directory or volume.
+```bash
+mkdir flatline && cd flatline
+curl -O https://raw.githubusercontent.com/artchsh/flatline/master/compose.yaml
+docker compose up -d
+```
+
+Flatline listens on port **3001** by default. Open <http://localhost:3001> and create the first
+user.
 
 ### 🐳 Docker Command
 
 ```bash
-docker run -d --restart=always -p 3001:3001 -v uptime-kuma:/app/data --name uptime-kuma louislam/uptime-kuma:2
-```
-
-Uptime Kuma is now running on all network interfaces (e.g. http://localhost:3001 or http://your-ip:3001).
-
-If you want to limit exposure to localhost only:
-
-```bash
-docker run ... -p 127.0.0.1:3001:3001 ...
+docker run -d \
+  --restart=always \
+  -p 3001:3001 \
+  -v flatline:/app/data \
+  --name flatline \
+  artchsh/flatline:1
 ```
 
 ### 💪🏻 Non-Docker
 
-Requirements:
-
-- Platform
-  - ✅ Major Linux distros such as Debian, Ubuntu, Fedora and ArchLinux etc.
-  - ✅ Windows 10 (x64), Windows Server 2012 R2 (x64) or higher
-  - ❌ FreeBSD / OpenBSD / NetBSD
-  - ❌ Replit / Heroku
-- [Node.js](https://nodejs.org/en/download/) >= 20.4
-- [Git](https://git-scm.com/downloads)
-- [pm2](https://pm2.keymetrics.io/) - For running Uptime Kuma in the background
+Requires Node.js >= 26.2.0.
 
 ```bash
-git clone https://github.com/louislam/uptime-kuma.git
-cd uptime-kuma
-npm run setup
+git clone https://github.com/artchsh/flatline.git
+cd flatline
+npm ci
+npm run build
 
-# Option 1. Try it
-node server/server.js
+# Try it
+npm run start-server-dev
 
-# (Recommended) Option 2. Run in the background using PM2
-# Install PM2 if you don't have it:
-npm install pm2 -g && pm2 install pm2-logrotate
-
-# Start Server
-pm2 start server/server.js --name uptime-kuma
+# (Recommended) Run in the background
+npm install -g pm2
+pm2 start npm --name flatline -- run start
+pm2 save
 ```
 
-Uptime Kuma is now running on all network interfaces (e.g. http://localhost:3001 or http://your-ip:3001).
+Data is stored in `./data` (SQLite by default).
 
-More useful PM2 Commands
+## 🔌 Quick start with the API
+
+Create a token under **Settings → API Keys**, optionally scoped to `read` only. Tokens are shown
+once.
 
 ```bash
-# If you want to see the current console output
-pm2 monit
+# What is broken right now?
+curl -H "Authorization: Bearer uk1_..." http://localhost:3001/api/v1/health
 
-# If you want to add it to startup
-pm2 startup && pm2 save
+# Create a monitor
+curl -X POST http://localhost:3001/api/v1/monitors \
+  -H "Authorization: Bearer uk1_..." \
+  -H "Content-Type: application/json" \
+  -d '{"name":"My API","type":"http","url":"https://example.com"}'
+
+# Let an agent report its own check results
+curl -X POST http://localhost:3001/api/v1/monitors/1/heartbeat \
+  -H "Authorization: Bearer uk1_..." \
+  -H "Content-Type: application/json" \
+  -d '{"status":"up","ping":123}'
 ```
 
-### Advanced Installation
-
-If you need more options or need to browse via a reverse proxy, please read:
-
-<https://github.com/louislam/uptime-kuma/wiki/%F0%9F%94%A7-How-to-Install>
+Point an agent at `http://localhost:3001/api/v1/openapi.json` and it can figure out the rest.
 
 ## 🆙 How to Update
 
-Please read:
+```bash
+docker compose pull && docker compose up -d
+```
 
-<https://github.com/louislam/uptime-kuma/wiki/%F0%9F%86%99-How-to-Update>
+## 📜 Credits & licence
 
-## 🆕 What's Next?
+Built on [Uptime Kuma](https://github.com/louislam/uptime-kuma) by Louis Lam, MIT licensed.
+This fork is released under the same licence; see [LICENSE](./LICENSE), which retains his
+copyright notice.
 
-I will assign requests/issues to the next milestone.
-
-<https://github.com/louislam/uptime-kuma/milestones>
-
-## ❤️ Sponsors
-
-[![Powered by Atlas Cloud](https://www.atlascloud.ai/oss-program/powered-by-atlas-cloud.svg)](https://www.atlascloud.ai/?ref=UZCYBN)
-
-Thank you so much! (GitHub Sponsors will be updated manually. OpenCollective sponsors will be updated automatically, the list will be cached by GitHub though. It may need some time to be updated)
-
-<img src="https://uptime.kuma.pet/sponsors?v=6" alt="Uptime Kuma Sponsors" />
-
-## 🖼 More Screenshots
-
-Light Mode:
-
-<img src="https://uptime.kuma.pet/img/light.jpg" width="512" alt="Uptime Kuma Light Mode Screenshot of how the Dashboard looks" />
-
-Status Page:
-
-<img src="https://user-images.githubusercontent.com/1336778/134628766-a3fe0981-0926-4285-ab46-891a21c3e4cb.png" width="512" alt="Uptime Kuma Status Page Screenshot" />
-
-Settings Page:
-
-<img src="https://louislam.net/uptimekuma/2.jpg" width="400" alt="Uptime Kuma Settings Page Screenshot" />
-
-Telegram Notification Sample:
-
-<img src="https://louislam.net/uptimekuma/3.jpg" width="400" alt="Uptime Kuma Telegram Notification Sample Screenshot" />
-
-## Motivation
-
-- I was looking for a self-hosted monitoring tool like "Uptime Robot", but it is hard to find a suitable one. One of the closest ones is statping. Unfortunately, it is not stable and no longer maintained.
-- Wanted to build a fancy UI.
-- Learn Vue 3 and vite.js.
-- Show the power of Bootstrap 5.
-- Try to use WebSocket with SPA instead of a REST API.
-- Deploy my first Docker image to Docker Hub.
-
-If you love this project, please consider giving it a ⭐.
-
-## 🗣️ Discussion / Ask for Help
-
-⚠️ For any general or technical questions, please don't send me an email, as I am unable to provide support in that manner. I will not respond if you ask questions there.
-
-I recommend using Google, GitHub Issues, or Uptime Kuma's subreddit for finding answers to your question. If you cannot find the information you need, feel free to ask:
-
-- [GitHub Issues](https://github.com/louislam/uptime-kuma/issues)
-- [Subreddit (r/UptimeKuma)](https://www.reddit.com/r/UptimeKuma/)
-
-My Reddit account: [u/louislamlam](https://reddit.com/u/louislamlam)
-You can mention me if you ask a question on the subreddit.
-
-## Contributions
-
-### Create Pull Requests
-
-Pull requests are awesome.
-To keep reviews fast and effective, please make sure you’ve [read our pull request guidelines](https://github.com/louislam/uptime-kuma/blob/master/CONTRIBUTING.md#can-i-create-a-pull-request-for-uptime-kuma).
-
-### Test Pull Requests
-
-There are a lot of pull requests right now, but I don't have time to test them all.
-
-If you want to help, you can check this:
-<https://github.com/louislam/uptime-kuma/wiki/Test-Pull-Requests>
-
-### Test Beta Version
-
-Check out the latest beta release here: <https://github.com/louislam/uptime-kuma/releases>
-
-### Bug Reports / Feature Requests
-
-If you want to report a bug or request a new feature, feel free to open a [new issue](https://github.com/louislam/uptime-kuma/issues).
-
-### Translations
-
-If you want to translate Uptime Kuma into your language, please visit [Weblate Readme](https://github.com/louislam/uptime-kuma/blob/master/src/lang/README.md).
-
-### Spelling & Grammar
-
-Feel free to correct the grammar in the documentation or code.
-My mother language is not English and my grammar is not that great.
+Upstream project: <https://github.com/louislam/uptime-kuma>

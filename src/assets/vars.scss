@@ -1,20 +1,41 @@
-$primary: #5cdd8b;
-$danger: #dc3545;
-$warning: #f8a306;
-$maintenance: #1747f5;
-$link-color: #111;
+// Flatline palette.
+//
+// Derived from the design tokens of https://1410666.xyz rather than the
+// upstream green: a near-black warm background, an off-white foreground and a
+// single hot-orange accent.
+//
+//   --color-background #111113   --color-foreground #f2efea
+//   --color-accent     #ff4d2e   --color-muted      #bab3ad
+//   --color-quiet      #938c87   --color-warning    #f0c54b
+
+// Accent. Used for primary buttons, links, active states and the heartbeat
+// bar's "up" colour.
+$primary: #ff4d2e;
+$highlight: #ff7a5e;
+$highlight-white: #2a1611;
+
+// Destructive. Kept distinct from the accent so a down alert never reads as
+// a normal action.
+$danger: #e5484d;
+
+// Status colours. $maintenance stays cool blue so "under maintenance" is
+// visibly a third state rather than a shade of the accent.
+$warning: #f0c54b;
+$maintenance: #4c8dff;
+
+// Light theme surfaces.
+$link-color: #111113;
+$secondary-text: #6b6660;
 $border-radius: 50rem;
-$secondary-text: #aaa;
 
-$highlight: #7ce8a4;
-$highlight-white: #e7faec;
-
-$dark-font-color: #b1b8c0;
-$dark-font-color2: #020b05;
-$dark-bg: #0d1117;
-$dark-bg2: #070a10;
-$dark-border-color: #1d2634;
-$dark-header-bg: #161b22;
+// Dark theme (the default). Warm near-blacks rather than blue-grey, to match
+// the background above.
+$dark-font-color: #f2efea;
+$dark-font-color2: #1a1016;
+$dark-bg: #111113;
+$dark-bg2: #0b0b0d;
+$dark-border-color: #26262a;
+$dark-header-bg: #161618;
 
 $easing-in: cubic-bezier(0.54, 0.78, 0.55, 0.97);
 $easing-out: cubic-bezier(0.25, 0.46, 0.45, 0.94);
