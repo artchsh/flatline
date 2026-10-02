@@ -134,6 +134,7 @@ const { Notification } = require("./notification");
 Notification.init();
 
 const monitorService = require("./monitor-service");
+const { assertOwnsMonitor } = require("./socket-handlers/ownership");
 
 log.debug("server", "Importing Database");
 const Database = require("./database");
@@ -696,6 +697,19 @@ app.use(function (req, res, next) {
                     });
                     return;
                 }
+
+                // tag is shared upstream (no user_id column), so require that
+                // this user has a monitor using it before allowing an edit.
+                const inUse = await R.getRow(
+                    `SELECT id FROM monitor_tag WHERE tag_id = ?
+                     AND monitor_id IN (SELECT id FROM monitor WHERE user_id = ?) LIMIT 1`,
+                    [ tag.id, socket.userID ]
+                );
+
+                if (!inUse) {
+                    throw new Error("You do not own this.");
+                }
+
                 bean.name = tag.name;
                 bean.color = tag.color;
                 await R.store(bean);
@@ -718,7 +732,20 @@ app.use(function (req, res, next) {
             try {
                 checkLogin(socket);
 
-                await R.exec("DELETE FROM tag WHERE id = ? ", [tagID]);
+                // tag has no user_id column (it is shared upstream), so instead
+                // of a blanket delete only allow removing a tag that this user
+                // actually uses. Otherwise any user could delete another's tag.
+                const inUse = await R.getRow(
+                    `SELECT id FROM monitor_tag WHERE tag_id = ?
+                     AND monitor_id IN (SELECT id FROM monitor WHERE user_id = ?) LIMIT 1`,
+                    [ tagID, socket.userID ]
+                );
+
+                if (!inUse) {
+                    throw new Error("You do not own this.");
+                }
+
+                await R.exec("DELETE FROM tag WHERE id = ? ", [ tagID ]);
 
                 callback({
                     ok: true,
@@ -736,6 +763,8 @@ app.use(function (req, res, next) {
         socket.on("addMonitorTag", async (tagID, monitorID, value, callback) => {
             try {
                 checkLogin(socket);
+
+                await assertOwnsMonitor(socket.userID, monitorID);
 
                 await R.exec("INSERT INTO monitor_tag (tag_id, monitor_id, value) VALUES (?, ?, ?)", [
                     tagID,
@@ -762,6 +791,8 @@ app.use(function (req, res, next) {
             try {
                 checkLogin(socket);
 
+                await assertOwnsMonitor(socket.userID, monitorID);
+
                 await R.exec("UPDATE monitor_tag SET value = ? WHERE tag_id = ? AND monitor_id = ?", [
                     value,
                     tagID,
@@ -786,6 +817,8 @@ app.use(function (req, res, next) {
         socket.on("deleteMonitorTag", async (tagID, monitorID, value, callback) => {
             try {
                 checkLogin(socket);
+
+                await assertOwnsMonitor(socket.userID, monitorID);
 
                 await R.exec("DELETE FROM monitor_tag WHERE tag_id = ? AND monitor_id = ? AND value = ?", [
                     tagID,
@@ -1024,7 +1057,13 @@ app.use(function (req, res, next) {
 
                 log.info("manage", `Clear Events Monitor: ${monitorID} User ID: ${socket.userID}`);
 
-                await R.exec("UPDATE heartbeat SET msg = ?, important = ? WHERE monitor_id = ? ", ["", "0", monitorID]);
+                await assertOwnsMonitor(socket.userID, monitorID);
+
+                await R.exec(
+                    `UPDATE heartbeat SET msg = ?, important = ?
+                     WHERE monitor_id IN (SELECT id FROM monitor WHERE id = ? AND user_id = ?)`,
+                    [ "", "0", monitorID, socket.userID ]
+                );
 
                 callback({
                     ok: true,
@@ -1042,6 +1081,8 @@ app.use(function (req, res, next) {
                 checkLogin(socket);
 
                 log.info("manage", `Clear Heartbeats Monitor: ${monitorID} User ID: ${socket.userID}`);
+
+                await assertOwnsMonitor(socket.userID, monitorID);
 
                 await UptimeCalculator.clearStatistics(monitorID);
 
@@ -1071,12 +1112,13 @@ app.use(function (req, res, next) {
 
                 log.info("manage", `Clear Statistics User ID: ${socket.userID}`);
 
-                await UptimeCalculator.clearAllStatistics();
+                // Scoped to this user: clearAllStatistics() wipes every user's data.
+                await UptimeCalculator.clearStatisticsForUser(socket.userID);
 
-                // Restart all monitors to reset the stats
+                // Restart only this user's monitors to reset their stats.
                 for (let monitorID in server.monitorList) {
                     const monitor = server.monitorList[monitorID];
-                    if (monitor.active) {
+                    if (monitor.active && monitor.user_id === socket.userID) {
                         await restartMonitor(socket.userID, monitorID);
                     }
                 }
@@ -1150,17 +1192,6 @@ app.use(function (req, res, next) {
 })();
 
 /**
- * @deprecated Use monitorService.updateMonitorNotification. Kept as a thin
- * re-export so existing callers keep working.
- * @param {number} monitorID Monitor to update
- * @param {{[key: string]: boolean}} notificationIDList Notification links
- * @returns {Promise<void>}
- */
-async function updateMonitorNotification(monitorID, notificationIDList) {
-    return monitorService.updateMonitorNotification(monitorID, notificationIDList);
-}
-
-/**
  * @deprecated Use monitorService.startMonitor.
  * @param {string} userID Owner
  * @param {number} monitorID Monitor to start
@@ -1188,16 +1219,6 @@ async function restartMonitor(userID, monitorID) {
  */
 async function pauseMonitor(userID, monitorID) {
     return monitorService.pauseMonitor(userID, monitorID);
-}
-
-/**
- * @deprecated Use monitorService.loadOwnedMonitor.
- * @param {string} userID Owner
- * @param {number} monitorID Monitor to check
- * @returns {Promise<void>}
- */
-async function checkOwner(userID, monitorID) {
-    return monitorService.loadOwnedMonitor(userID, monitorID);
 }
 
 

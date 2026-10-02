@@ -74,12 +74,20 @@ async function loadOwnedMonitor(userID, monitorID) {
 
 /**
  * Replace a monitor's notification links.
+ * @param {string} userID Owner of the monitor, used to scope the delete
  * @param {number} monitorID Monitor to update
  * @param {{[key: string]: boolean}} notificationIDList Map of notification id -> enabled
  * @returns {Promise<void>}
  */
-async function updateMonitorNotification(monitorID, notificationIDList) {
-    await R.exec("DELETE FROM monitor_notification WHERE monitor_id = ? ", [ monitorID ]);
+async function updateMonitorNotification(userID, monitorID, notificationIDList) {
+    // DELETE ... WHERE monitor_id = ? AND user_id IN (SELECT id FROM monitor WHERE user_id = ?)
+    // The sub-select keeps this safe even if the caller skipped the ownership
+    // check: it can only ever remove links on the caller's own monitor.
+    await R.exec(
+        `DELETE FROM monitor_notification WHERE monitor_id IN
+         (SELECT id FROM monitor WHERE id = ? AND user_id = ?)`,
+        [ monitorID, userID ]
+    );
 
     for (const notificationID in notificationIDList) {
         if (notificationIDList[notificationID]) {
@@ -209,7 +217,7 @@ async function createMonitor(userID, payload, options = {}) {
     await R.store(bean);
 
     if (notificationIDList) {
-        await updateMonitorNotification(bean.id, notificationIDList);
+        await updateMonitorNotification(userID, bean.id, notificationIDList);
     }
 
     log.info("monitor", `Added Monitor: ${bean.id} User ID: ${userID}`);
@@ -289,7 +297,7 @@ async function updateMonitor(userID, monitorID, payload, options = {}) {
     }
 
     if (notificationIDList) {
-        await updateMonitorNotification(bean.id, notificationIDList);
+        await updateMonitorNotification(userID, bean.id, notificationIDList);
     }
 
     log.info("monitor", `Edited Monitor: ${bean.id} User ID: ${userID}`);

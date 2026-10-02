@@ -861,6 +861,9 @@ class UptimeCalculator {
 
     /**
      * Clear all statistics and heartbeats for all monitors
+     *
+     * Wipes the entire table, so this is destructive for every user. Use
+     * clearStatisticsForUser() when acting on behalf of one logged-in user.
      * @returns {Promise<void>}
      */
     static async clearAllStatistics() {
@@ -870,6 +873,29 @@ class UptimeCalculator {
         await R.exec("DELETE FROM stat_daily");
 
         await UptimeCalculator.removeAll();
+    }
+
+    /**
+     * Clear statistics and heartbeats for one user's monitors only.
+     *
+     * Heartbeat and stat rows have no user_id, so they are reached through a
+     * sub-select on monitor. In-memory caches are dropped per monitor.
+     * @param {string} userID Owner whose data should be cleared
+     * @returns {Promise<void>}
+     */
+    static async clearStatisticsForUser(userID) {
+        const owned = "monitor_id IN (SELECT id FROM monitor WHERE user_id = ?)";
+
+        await R.exec(`DELETE FROM heartbeat WHERE ${owned}`, [ userID ]);
+        await R.exec(`DELETE FROM stat_minutely WHERE ${owned}`, [ userID ]);
+        await R.exec(`DELETE FROM stat_hourly WHERE ${owned}`, [ userID ]);
+        await R.exec(`DELETE FROM stat_daily WHERE ${owned}`, [ userID ]);
+
+        // Drop the cached calculators so the next read starts empty.
+        const monitors = await R.getAll("SELECT id FROM monitor WHERE user_id = ?", [ userID ]);
+        for (const monitor of monitors) {
+            await UptimeCalculator.remove(monitor.id);
+        }
     }
 }
 
