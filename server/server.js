@@ -132,8 +132,6 @@ const {
 log.debug("server", "Importing Notification");
 const { Notification } = require("./notification");
 Notification.init();
-log.debug("server", "Importing Web-Push");
-const webpush = require("web-push");
 
 log.debug("server", "Importing Database");
 const Database = require("./database");
@@ -1245,41 +1243,6 @@ app.use(function (req, res, next) {
             } catch (e) {
                 log.error("server", e);
 
-                callback({
-                    ok: false,
-                    msg: e.message,
-                });
-            }
-        });
-
-        socket.on("checkApprise", async (callback) => {
-            try {
-                checkLogin(socket);
-                callback(await Notification.checkApprise());
-            } catch (e) {
-                callback(false);
-            }
-        });
-
-        socket.on("getWebpushVapidPublicKey", async (callback) => {
-            try {
-                let publicVapidKey = await Settings.get("webpushPublicVapidKey");
-
-                if (!publicVapidKey) {
-                    log.debug("webpush", "Generating new VAPID keys");
-                    const vapidKeys = webpush.generateVAPIDKeys();
-
-                    await Settings.set("webpushPublicVapidKey", vapidKeys.publicKey);
-                    await Settings.set("webpushPrivateVapidKey", vapidKeys.privateKey);
-
-                    publicVapidKey = vapidKeys.publicKey;
-                }
-
-                callback({
-                    ok: true,
-                    msg: publicVapidKey,
-                });
-            } catch (e) {
                 callback({
                     ok: false,
                     msg: e.message,
