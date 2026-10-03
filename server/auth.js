@@ -97,10 +97,22 @@ async function resolveAPIKey(key) {
 }
 
 /**
+ * Ordered scope hierarchy, weakest first.
+ *
+ * Holding a scope implies everything below it, so a token with `publish` can
+ * also write and read. `publish` is separated from `write` because it gates
+ * the actions that make something reachable from the internet: publishing a
+ * status page, attaching a CNAME, deleting a page. An agent that can fix a
+ * broken page layout should not be able to expose a client's page.
+ * @type {string[]}
+ */
+const SCOPES = [ "read", "write", "publish" ];
+
+/**
  * Resolve the scopes granted to an API key.
  *
- * Keys created before scopes existed have a NULL `scopes` value; those are
- * treated as full access so upgrading does not lock anyone out.
+ * Keys created before scopes existed have a NULL `scopes` value; those get
+ * full access including `publish` so upgrading never locks anyone out.
  * @param {Bean} apiKeyBean Row returned by resolveAPIKey
  * @returns {string[]} Array of granted scopes
  */
@@ -108,13 +120,35 @@ function apiKeyScopes(apiKeyBean) {
     let scopes = apiKeyBean.scopes;
 
     if (!scopes) {
-        return [ "read", "write" ];
+        return [ ...SCOPES ];
     }
 
     return String(scopes)
         .split(",")
         .map((s) => s.trim().toLowerCase())
         .filter((s) => s.length > 0);
+}
+
+/**
+ * Whether a granted scope set satisfies a required scope.
+ *
+ * Implied by rank, so `publish` satisfies a `write` requirement.
+ * @param {string[]} granted Scopes on the token
+ * @param {string} required Scope the endpoint needs
+ * @returns {boolean} True if allowed
+ */
+function hasScope(granted, required) {
+    if (!SCOPES.includes(required)) {
+        // Unknown requirement: fail closed.
+        return false;
+    }
+
+    const requiredRank = SCOPES.indexOf(required);
+
+    return granted.some((scope) => {
+        const rank = SCOPES.indexOf(scope);
+        return rank >= requiredRank;
+    });
 }
 
 /**
@@ -247,6 +281,9 @@ exports.apiAuth = async function (req, res, next) {
  * @param {string} requiredScope Scope this endpoint needs ("read" or "write")
  * @returns {Function} Express middleware
  */
+exports.SCOPES = SCOPES;
+exports.hasScope = hasScope;
+
 exports.tokenAuth = function (requiredScope = "read") {
     return async function (req, res, next) {
         if (await Settings.get("disableAuth")) {
@@ -292,7 +329,7 @@ exports.tokenAuth = function (requiredScope = "read") {
 
         let scopes = apiKeyScopes(apiKeyBean);
 
-        if (!scopes.includes(requiredScope)) {
+        if (!hasScope(scopes, requiredScope)) {
             log.warn("api-auth", `Token lacks "${requiredScope}" scope (has: ${scopes.join(",") || "none"})`);
             res.status(403).json({
                 ok: false,

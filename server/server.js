@@ -360,6 +360,11 @@ app.use(function (req, res, next) {
     const apiV1Router = require("./routers/api-v1-router");
     app.use(apiV1Router);
 
+    // Status pages, groups, incidents and domains. Separate file for
+    // readability; it must be mounted before the SPA catch-all too.
+    const apiV1StatusRouter = require("./routers/api-v1-status-router");
+    app.use(apiV1StatusRouter);
+
     // Status Page Router
     const statusPageRouter = require("./routers/status-page-router");
     app.use(statusPageRouter);

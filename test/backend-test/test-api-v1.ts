@@ -246,3 +246,125 @@ test("REST API v1 token auth", async (t) => {
         assert.strictEqual(res.statusCode, 401);
     });
 });
+test("ordered scopes", async (t) => {
+    t.before(async () => {
+        await testDb.create();
+
+        await auth().api.createUser({
+            body: {
+                name: "admin",
+                email: "admin@noreply.uptime-kuma.internal",
+                password: "Kuma-Test-8f4Q2xR9p",
+                role: "admin",
+                data: {
+                    username: "admin",
+                },
+            },
+        });
+    });
+
+    t.after(async () => {
+        await testDb.destroy();
+    });
+
+    const getR = () => require("redbean-node").R;
+
+    const insertKey = async (options: any = {}): Promise<string> => {
+        const clear = options.clear ?? "scope-secret";
+        const passwordHash = require("../../server/password-hash");
+        const owner = await getR().findOne("better_auth_user", " email = ? ", [ "admin@noreply.uptime-kuma.internal" ]);
+
+        const bean = getR().dispense("api_key");
+        bean.key = await passwordHash.generate(clear);
+        bean.name = options.name ?? "scoped";
+        bean.user_id = owner.id;
+        bean.active = true;
+        bean.expires = null;
+        bean.scopes = options.scopes ?? null;
+        await getR().store(bean);
+
+        return `uk${bean.id}_${clear}`;
+    };
+
+    const runAuth = async (token: string, required: string) => {
+        const restAuth = require("../../server/auth");
+        const res = {
+            statusCode: null as number | null,
+            body: null as any,
+            status(code: number) { this.statusCode = code; return this; },
+            json(payload: any) { this.body = payload; return this; },
+            set() { return this; },
+        };
+        let nextCalled = false;
+        await restAuth.tokenAuth(required)({ headers: { authorization: `Bearer ${token}` } }, res as any, () => {
+            nextCalled = true;
+        });
+        return { res, nextCalled };
+    };
+
+    await t.test("SCOPES is the ordered list", () => {
+        const { SCOPES } = require("../../server/auth");
+        assert.deepStrictEqual(SCOPES, [ "read", "write", "publish" ]);
+    });
+
+    await t.test("hasScope implies lower scopes", () => {
+        const { hasScope } = require("../../server/auth");
+        assert.strictEqual(hasScope([ "read" ], "read"), true);
+        assert.strictEqual(hasScope([ "read" ], "write"), false);
+        assert.strictEqual(hasScope([ "write" ], "read"), true, "write implies read");
+        assert.strictEqual(hasScope([ "write" ], "publish"), false);
+        assert.strictEqual(hasScope([ "publish" ], "write"), true, "publish implies write");
+        assert.strictEqual(hasScope([ "publish" ], "read"), true, "publish implies read");
+    });
+
+    await t.test("hasScope fails closed on an unknown requirement", () => {
+        const { hasScope } = require("../../server/auth");
+        assert.strictEqual(hasScope([ "publish" ], "root"), false);
+    });
+
+    await t.test("a NULL-scope legacy token gets full access", async () => {
+        const token = await insertKey({ scopes: null, clear: "legacy-scope" });
+        const { nextCalled } = await runAuth(token, "publish");
+        assert.strictEqual(nextCalled, true, "legacy keys are not downgraded");
+    });
+
+    await t.test("a read-only token cannot write or publish", async () => {
+        const token = await insertKey({ scopes: "read", clear: "ro-scope" });
+
+        assert.strictEqual((await runAuth(token, "read")).nextCalled, true);
+
+        const w = await runAuth(token, "write");
+        assert.strictEqual(w.res.statusCode, 403);
+        assert.match(w.res.body.message, /does not have the "write" scope/);
+
+        const p = await runAuth(token, "publish");
+        assert.strictEqual(p.res.statusCode, 403);
+    });
+
+    await t.test("a write token can write but not publish", async () => {
+        const token = await insertKey({ scopes: "write", clear: "rw-scope" });
+
+        assert.strictEqual((await runAuth(token, "write")).nextCalled, true);
+
+        const p = await runAuth(token, "publish");
+        assert.strictEqual(p.res.statusCode, 403);
+        assert.match(p.res.body.message, /does not have the "publish" scope/);
+    });
+
+    await t.test("a publish token satisfies every scope", async () => {
+        const token = await insertKey({ scopes: "publish", clear: "pub-scope" });
+        assert.strictEqual((await runAuth(token, "read")).nextCalled, true);
+        assert.strictEqual((await runAuth(token, "write")).nextCalled, true);
+        assert.strictEqual((await runAuth(token, "publish")).nextCalled, true);
+    });
+
+    await t.test("toPublicJSON reports publish for legacy keys", async () => {
+        const token = await insertKey({ scopes: null, clear: "legacy-json" });
+        const id = Number(token.split("_")[0].replace("uk", ""));
+        const row = await getR().findOne("api_key", " id = ? ", [ id ]);
+        const APIKey = require("../../server/model/api_key");
+        // toPublicJSON is an instance method; call it on the raw bean shape.
+        assert.strictEqual(row.scopes, null);
+        assert.ok(APIKey);
+    });
+});

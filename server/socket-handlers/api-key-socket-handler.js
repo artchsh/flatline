@@ -6,6 +6,7 @@ const passwordHash = require("../password-hash");
 const apicache = require("../modules/apicache");
 const APIKey = require("../model/api_key");
 const { Settings } = require("../settings");
+const { SCOPES } = require("../auth");
 const { sendAPIKeyList } = require("../client");
 
 /**
@@ -31,10 +32,10 @@ module.exports.apiKeySocketHandler = (socket) => {
                     ? key.scopes
                     : String(key.scopes).split(",").map((s) => s.trim().toLowerCase()).filter((s) => s.length > 0);
 
-                let invalid = requested.filter((s) => s !== "read" && s !== "write");
+                let invalid = requested.filter((s) => !SCOPES.includes(s));
 
                 if (invalid.length > 0) {
-                    throw new Error(`Invalid scope(s): ${invalid.join(", ")}. Use "read" and/or "write".`);
+                    throw new Error(`Invalid scope(s): ${invalid.join(", ")}. Use ${SCOPES.map((s) => `"${s}"`).join(", ")}.`);
                 }
 
                 if (requested.length === 0) {

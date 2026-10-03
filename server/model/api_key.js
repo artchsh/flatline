@@ -50,7 +50,7 @@ class APIKey extends BeanModel {
             expires: this.expires,
             status: this.getStatus(),
             // null means the key predates scopes and has full access.
-            scopes: scopes ?? [ "read", "write" ],
+            scopes: scopes ?? [ "read", "write", "publish" ],
         };
     }
 
