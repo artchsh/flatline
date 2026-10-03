@@ -7,32 +7,87 @@ const { R } = require("redbean-node");
 const { badgeConstants } = require("../../src/util");
 const { makeBadge } = require("badge-maker");
 const { UptimeCalculator } = require("../uptime-calculator");
+const statusPageAuth = require("../status-page-auth");
+const { log } = require("../../src/util");
 
 let router = express.Router();
+
+// The unlock form posts urlencoded; the API posts JSON.
+router.use(express.urlencoded({ extended: false }));
+router.use(express.json({ limit: "64kb" }));
 
 let cache = apicache.middleware;
 const server = UptimeKumaServer.getInstance();
 
-router.get("/status/:slug", cache("5 minutes"), async (request, response) => {
-    let slug = request.params.slug;
-    slug = slug.toLowerCase();
-    await StatusPage.handleStatusPageResponse(response, server.indexHTML, slug);
+/**
+ * Unlock a password-protected status page.
+ *
+ * Sets a signed, httpOnly cookie and redirects back to the page. A wrong
+ * password re-renders the prompt rather than redirecting, so the error is
+ * visible.
+ * @param {express.Request} request Express request
+ * @param {express.Response} response Express response
+ * @returns {Promise<void>}
+ */
+router.post("/api/v1/status-pages/unlock/:slug", async (request, response) => {
+    let slug = String(request.params.slug ?? "").toLowerCase();
+    const statusPage = await R.findOne("status_page", " slug = ? ", [ slug ]);
+
+    // Do not confirm whether a slug exists.
+    if (!statusPage || !statusPage.password) {
+        response.status(404).send("Not found");
+        return;
+    }
+
+    const password = request.body?.password ?? "";
+
+    if (!statusPageAuth.verifyPassword(password, statusPage.password)) {
+        response.status(401).send(statusPageAuth.renderPasswordPrompt(slug, "That password is not correct."));
+        return;
+    }
+
+    statusPageAuth.setUnlockCookie(response, slug);
+
+    log.info("auth", `Unlocked status page "${slug}"`);
+
+    const back = request.get("referer") || `/status/${slug}`;
+    response.redirect(back);
 });
 
-router.get("/status/:slug/rss", cache("5 minutes"), async (request, response) => {
+/**
+ * robots.txt. Advisory only: this does not stop a crawler that already knows
+ * a URL, which is why per-client pages also carry a password.
+ * @param {express.Request} request Express request
+ * @param {express.Response} response Express response
+ * @returns {void}
+ */
+router.get("/robots.txt", (request, response) => {
+    response.type("text/plain").send("User-agent: *\nDisallow: /\n");
+});
+
+// Not cached: see the note on the RSS route below.
+router.get("/status/:slug", async (request, response) => {
+    let slug = request.params.slug;
+    slug = slug.toLowerCase();
+    await StatusPage.handleStatusPageResponse(response, server.indexHTML, slug, request);
+});
+
+// Not cached. A cached 401 would lock out a legitimate visitor and a
+// cached 200 would serve a password-protected page to anyone.
+router.get("/status/:slug/rss", async (request, response) => {
     let slug = request.params.slug;
     slug = slug.toLowerCase();
     await StatusPage.handleStatusPageRSSResponse(response, slug, request);
 });
 
-router.get("/status", cache("5 minutes"), async (request, response) => {
+router.get("/status", async (request, response) => {
     let slug = "default";
-    await StatusPage.handleStatusPageResponse(response, server.indexHTML, slug);
+    await StatusPage.handleStatusPageResponse(response, server.indexHTML, slug, request);
 });
 
-router.get("/status-page", cache("5 minutes"), async (request, response) => {
+router.get("/status-page", async (request, response) => {
     let slug = "default";
-    await StatusPage.handleStatusPageResponse(response, server.indexHTML, slug);
+    await StatusPage.handleStatusPageResponse(response, server.indexHTML, slug, request);
 });
 
 // Status page config, incident, monitor list

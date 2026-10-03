@@ -1,5 +1,6 @@
 const { BeanModel } = require("redbean-node/dist/bean-model");
 const { R } = require("redbean-node");
+const statusPageAuth = require("../status-page-auth");
 const { SHARED_ROOM } = require("../shared-room");
 const cheerio = require("cheerio");
 const { UptimeKumaServer } = require("../uptime-kuma-server");
@@ -39,6 +40,15 @@ class StatusPage extends BeanModel {
     static async handleStatusPageRSSResponse(response, slug, request) {
         let statusPage = await R.findOne("status_page", " slug = ? ", [slug]);
 
+        response.set("X-Robots-Tag", statusPageAuth.robotsDirectives());
+
+        // Otherwise the feed would hand a password-protected page's incident
+        // history to anyone who subscribes to it.
+        if (statusPage && !statusPageAuth.isUnlocked(request, statusPage)) {
+            response.status(401).type("text/plain").send("This status page is private.");
+            return;
+        }
+
         if (statusPage) {
             const feedUrl = await StatusPage.buildRSSUrl(slug, request);
             response.type("application/rss+xml");
@@ -53,9 +63,10 @@ class StatusPage extends BeanModel {
      * @param {Response} response Response object
      * @param {string} indexHTML HTML to render
      * @param {string} slug Status page slug
+     * @param {Request} request Request object, used for the password gate
      * @returns {Promise<void>}
      */
-    static async handleStatusPageResponse(response, indexHTML, slug) {
+    static async handleStatusPageResponse(response, indexHTML, slug, request) {
         // Handle url with trailing slash (http://localhost:3001/status/)
         // The slug comes from the route "/status/:slug". If the slug is empty, express converts it to "index.html"
         if (slug === "index.html") {
@@ -63,6 +74,14 @@ class StatusPage extends BeanModel {
         }
 
         let statusPage = await R.findOne("status_page", " slug = ? ", [slug]);
+
+        // Every status page is excluded from indexing. Advisory, but cheap.
+        response.set("X-Robots-Tag", statusPageAuth.robotsDirectives());
+
+        if (statusPage && !statusPageAuth.isUnlocked(request, statusPage)) {
+            response.status(401).send(statusPageAuth.renderPasswordPrompt(statusPage.slug));
+            return;
+        }
 
         if (statusPage) {
             response.send(await StatusPage.renderHTML(indexHTML, statusPage));
@@ -169,6 +188,7 @@ class StatusPage extends BeanModel {
         $("title").text(statusPage.title);
         $("meta[name=description]").attr("content", description155);
 
+
         if (statusPage.icon) {
             $("link[rel=icon]").attr("href", statusPage.icon).removeAttr("type");
 
@@ -176,6 +196,11 @@ class StatusPage extends BeanModel {
         }
 
         const head = $("head");
+
+        // Flatline status pages are private. The upstream search_engine_index
+        // column was never enforced, so exclude unconditionally rather than
+        // honouring a flag that was always true.
+        head.append($('<meta name="robots" />').attr("content", statusPageAuth.robotsDirectives()));
 
         if (analytics.isValidAnalyticsConfig(statusPage)) {
             let escapedAnalyticsScript = analytics.getAnalyticsScript(statusPage);
