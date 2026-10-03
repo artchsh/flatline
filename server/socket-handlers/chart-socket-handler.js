@@ -1,7 +1,6 @@
 const { checkLogin } = require("../util-server");
 const { UptimeCalculator } = require("../uptime-calculator");
 const { log } = require("../../src/util");
-const { assertOwnsMonitor } = require("./ownership");
 
 module.exports.chartSocketHandler = (socket) => {
     socket.on("getMonitorChartData", async (monitorID, period, callback) => {
@@ -13,10 +12,6 @@ module.exports.chartSocketHandler = (socket) => {
             if (period == null) {
                 throw new Error("Invalid period.");
             }
-
-            // UptimeCalculator only takes a monitor id, so without this check
-            // any logged-in user could read another user's chart data.
-            await assertOwnsMonitor(socket.userID, monitorID);
 
             let uptimeCalculator = await UptimeCalculator.getUptimeCalculator(monitorID);
 

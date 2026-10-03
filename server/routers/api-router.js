@@ -7,6 +7,7 @@ const {
     sendHttpError,
 } = require("../util-server");
 const { R } = require("redbean-node");
+const { SHARED_ROOM } = require("../shared-room");
 const apicache = require("../modules/apicache");
 const Monitor = require("../model/monitor");
 const dayjs = require("dayjs");
@@ -135,9 +136,10 @@ router.all("/api/push/:pushToken", async (request, response) => {
 
         await R.store(bean);
 
-        io.to(monitor.user_id).emit("heartbeat", bean.toJSON());
+        // Shared instance: broadcast to every logged-in user.
+        io.to(SHARED_ROOM).emit("heartbeat", bean.toJSON());
 
-        Monitor.sendStats(io, monitor.id, monitor.user_id);
+        Monitor.sendStats(io, monitor.id);
 
         try {
             new Prometheus(monitor, await monitor.getTags()).update(bean, undefined);

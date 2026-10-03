@@ -2,6 +2,7 @@ const dayjs = require("dayjs");
 const axios = require("axios");
 const { setTimeout, clearTimeout } = require("unlimited-timeout");
 const { Prometheus } = require("../prometheus");
+const { SHARED_ROOM } = require("../shared-room");
 const {
     log,
     UP,
@@ -1061,8 +1062,8 @@ class Monitor extends BeanModel {
 
             // Send to frontend
             log.debug("monitor", `[${this.name}] Send to socket`);
-            io.to(this.user_id).emit("heartbeat", bean.toJSON());
-            Monitor.sendStats(io, this.id, this.user_id);
+            io.to(SHARED_ROOM).emit("heartbeat", bean.toJSON());
+            Monitor.sendStats(io, this.id);
 
             // Store to database
             log.debug("monitor", `[${this.name}] Store`);
@@ -1314,34 +1315,36 @@ class Monitor extends BeanModel {
      * Send statistics to clients
      * @param {Server} io Socket server instance
      * @param {number} monitorID ID of monitor to send
-     * @param {number} userID ID of user to send to
      * @returns {Promise<void>}
      */
-    static async sendStats(io, monitorID, userID) {
-        const hasClients = getTotalClientInRoom(io, userID) > 0;
+    static async sendStats(io, monitorID) {
+        // Shared instance: stats go to the shared room, which every
+        // logged-in socket joins. Previously this was the monitor creator's
+        // per-user room, so other users' dashboards went stale.
+        const hasClients = getTotalClientInRoom(io, SHARED_ROOM) > 0;
         let uptimeCalculator = await UptimeCalculator.getUptimeCalculator(monitorID);
 
         if (hasClients) {
             // Send 24 hour average ping
             let data24h = await uptimeCalculator.get24Hour();
-            io.to(userID).emit("avgPing", monitorID, data24h.avgPing ? Number(data24h.avgPing.toFixed(2)) : null);
+            io.to(SHARED_ROOM).emit("avgPing", monitorID, data24h.avgPing ? Number(data24h.avgPing.toFixed(2)) : null);
 
             // Send 24 hour uptime
-            io.to(userID).emit("uptime", monitorID, 24, data24h.uptime);
+            io.to(SHARED_ROOM).emit("uptime", monitorID, 24, data24h.uptime);
 
             // Send 30 day uptime
             let data30d = await uptimeCalculator.get30Day();
-            io.to(userID).emit("uptime", monitorID, 720, data30d.uptime);
+            io.to(SHARED_ROOM).emit("uptime", monitorID, 720, data30d.uptime);
 
             // Send 1-year uptime
             let data1y = await uptimeCalculator.get1Year();
-            io.to(userID).emit("uptime", monitorID, "1y", data1y.uptime);
+            io.to(SHARED_ROOM).emit("uptime", monitorID, "1y", data1y.uptime);
 
             // Send Cert Info
-            await Monitor.sendCertInfo(io, monitorID, userID);
+            await Monitor.sendCertInfo(io, monitorID);
 
             // Send domain info
-            await Monitor.sendDomainInfo(io, monitorID, userID);
+            await Monitor.sendDomainInfo(io, monitorID);
         } else {
             log.debug("monitor", "No clients in the room, no need to send stats");
         }
@@ -1351,13 +1354,12 @@ class Monitor extends BeanModel {
      * Send certificate information to client
      * @param {Server} io Socket server instance
      * @param {number} monitorID ID of monitor to send
-     * @param {number} userID ID of user to send to
      * @returns {void}
      */
-    static async sendCertInfo(io, monitorID, userID) {
+    static async sendCertInfo(io, monitorID) {
         let tlsInfo = await R.findOne("monitor_tls_info", "monitor_id = ?", [monitorID]);
         if (tlsInfo != null) {
-            io.to(userID).emit("certInfo", monitorID, tlsInfo.info_json);
+            io.to(SHARED_ROOM).emit("certInfo", monitorID, tlsInfo.info_json);
         }
     }
 
@@ -1365,17 +1367,16 @@ class Monitor extends BeanModel {
      * Send domain name information to client
      * @param {Server} io Socket server instance
      * @param {number} monitorID ID of monitor to send
-     * @param {number} userID ID of user to send to
      * @returns {void}
      */
-    static async sendDomainInfo(io, monitorID, userID) {
+    static async sendDomainInfo(io, monitorID) {
         const monitor = await R.findOne("monitor", "id = ?", [monitorID]);
 
         try {
             const supportInfo = await DomainExpiry.checkSupport(monitor);
             const domain = await DomainExpiry.findByDomainNameOrCreate(supportInfo.domain);
             if (domain?.expiry) {
-                io.to(userID).emit("domainInfo", monitorID, domain.daysRemaining, new Date(domain.expiry));
+                io.to(SHARED_ROOM).emit("domainInfo", monitorID, domain.daysRemaining, new Date(domain.expiry));
             }
         } catch (e) {}
     }
@@ -2003,10 +2004,9 @@ class Monitor extends BeanModel {
     /**
      * Delete a monitor from the system
      * @param {number} monitorID ID of the monitor to delete
-     * @param {number} userID ID of the user who owns the monitor
      * @returns {Promise<void>}
      */
-    static async deleteMonitor(monitorID, userID) {
+    static async deleteMonitor(monitorID) {
         const server = UptimeKumaServer.getInstance();
 
         // Stop the monitor if it's running
@@ -2015,32 +2015,32 @@ class Monitor extends BeanModel {
             delete server.monitorList[monitorID];
         }
 
-        // Delete from database
-        await R.exec("DELETE FROM monitor WHERE id = ? AND user_id = ? ", [monitorID, userID]);
+        // Delete from database. Flatline is a shared instance, so this is not
+        // filtered on user_id.
+        await R.exec("DELETE FROM monitor WHERE id = ? ", [monitorID]);
     }
 
     /**
      * Recursively delete a monitor and all its descendants
      * @param {number} monitorID ID of the monitor to delete
-     * @param {number} userID ID of the user who owns the monitor
      * @returns {Promise<void>}
      */
-    static async deleteMonitorRecursively(monitorID, userID) {
+    static async deleteMonitorRecursively(monitorID) {
         // Check if this monitor is a group
-        const monitor = await R.findOne("monitor", " id = ? AND user_id = ? ", [monitorID, userID]);
+        const monitor = await R.findOne("monitor", " id = ? ", [monitorID]);
 
         if (monitor && monitor.type === "group") {
             // Get all children and delete them recursively
             const children = await Monitor.getChildren(monitorID);
             if (children && children.length > 0) {
                 for (const child of children) {
-                    await Monitor.deleteMonitorRecursively(child.id, userID);
+                    await Monitor.deleteMonitorRecursively(child.id);
                 }
             }
         }
 
         // Delete the monitor itself
-        await Monitor.deleteMonitor(monitorID, userID);
+        await Monitor.deleteMonitor(monitorID);
     }
 
     /**

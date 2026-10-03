@@ -1,5 +1,6 @@
 const { BeanModel } = require("redbean-node/dist/bean-model");
 const { R } = require("redbean-node");
+const { SHARED_ROOM } = require("../shared-room");
 const cheerio = require("cheerio");
 const { UptimeKumaServer } = require("../uptime-kuma-server");
 const jsesc = require("jsesc");
@@ -372,7 +373,7 @@ class StatusPage extends BeanModel {
             result[item.id] = await item.toJSON();
         }
 
-        io.to(socket.userID).emit("statusPageList", result);
+        io.to(SHARED_ROOM).emit("statusPageList", result);
         return list;
     }
 

@@ -8,7 +8,7 @@ class RemoteBrowser {
      * @returns {Promise<Bean>} Remote Browser
      */
     static async get(remoteBrowserID, userID) {
-        let bean = await R.findOne("remote_browser", " id = ? AND user_id = ? ", [remoteBrowserID, userID]);
+        let bean = await R.findOne("remote_browser", " id = ? ", [remoteBrowserID]);
 
         if (!bean) {
             throw new Error("Remote browser not found");
@@ -28,7 +28,7 @@ class RemoteBrowser {
         let bean;
 
         if (remoteBrowserID) {
-            bean = await R.findOne("remote_browser", " id = ? AND user_id = ? ", [remoteBrowserID, userID]);
+            bean = await R.findOne("remote_browser", " id = ? ", [remoteBrowserID]);
 
             if (!bean) {
                 throw new Error("Remote browser not found");
@@ -53,7 +53,7 @@ class RemoteBrowser {
      * @returns {Promise<void>}
      */
     static async delete(remoteBrowserID, userID) {
-        let bean = await R.findOne("remote_browser", " id = ? AND user_id = ? ", [remoteBrowserID, userID]);
+        let bean = await R.findOne("remote_browser", " id = ? ", [remoteBrowserID]);
 
         if (!bean) {
             throw new Error("Remote Browser not found");

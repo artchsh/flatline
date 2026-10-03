@@ -133,8 +133,8 @@ log.debug("server", "Importing Notification");
 const { Notification } = require("./notification");
 Notification.init();
 
+const { SHARED_ROOM } = require("./shared-room");
 const monitorService = require("./monitor-service");
-const { assertOwnsMonitor } = require("./socket-handlers/ownership");
 
 log.debug("server", "Importing Database");
 const Database = require("./database");
@@ -443,7 +443,7 @@ app.use(function (req, res, next) {
                 let notificationIDList = monitor.notificationIDList;
                 delete monitor.notificationIDList;
 
-                const bean = await monitorService.updateMonitor(socket.userID, monitor.id, monitor, {
+                const bean = await monitorService.updateMonitor(monitor.id, monitor, {
                     notificationIDList,
                 });
 
@@ -486,7 +486,8 @@ app.use(function (req, res, next) {
 
                 log.info("monitor", `Get Monitor: ${monitorID} User ID: ${socket.userID}`);
 
-                let monitor = await R.findOne("monitor", " id = ? AND user_id = ? ", [monitorID, socket.userID]);
+                // Shared instance: any logged-in user may open any monitor.
+                let monitor = await R.findOne("monitor", " id = ? ", [monitorID]);
                 const monitorData = [{ id: monitor.id, active: monitor.active }];
                 const preloadData = await Monitor.preparePreloadData(monitorData);
                 callback({
@@ -561,7 +562,7 @@ app.use(function (req, res, next) {
         socket.on("resumeMonitor", async (monitorID, callback) => {
             try {
                 checkLogin(socket);
-                await startMonitor(socket.userID, monitorID);
+                await monitorService.startMonitor(monitorID);
                 await server.sendUpdateMonitorIntoList(socket, monitorID);
 
                 callback({
@@ -580,7 +581,7 @@ app.use(function (req, res, next) {
         socket.on("pauseMonitor", async (monitorID, callback) => {
             try {
                 checkLogin(socket);
-                await pauseMonitor(socket.userID, monitorID);
+                await monitorService.pauseMonitor(monitorID);
                 await server.sendUpdateMonitorIntoList(socket, monitorID);
 
                 callback({
@@ -608,7 +609,7 @@ app.use(function (req, res, next) {
 
                 const startTime = Date.now();
 
-                const deleted = await monitorService.deleteMonitor(socket.userID, monitorID, deleteChildren);
+                const deleted = await monitorService.deleteMonitor(monitorID, deleteChildren);
 
                 // Fix #2880
                 apicache.clear();
@@ -698,17 +699,6 @@ app.use(function (req, res, next) {
                     return;
                 }
 
-                // tag is shared upstream (no user_id column), so require that
-                // this user has a monitor using it before allowing an edit.
-                const inUse = await R.getRow(
-                    `SELECT id FROM monitor_tag WHERE tag_id = ?
-                     AND monitor_id IN (SELECT id FROM monitor WHERE user_id = ?) LIMIT 1`,
-                    [ tag.id, socket.userID ]
-                );
-
-                if (!inUse) {
-                    throw new Error("You do not own this.");
-                }
 
                 bean.name = tag.name;
                 bean.color = tag.color;
@@ -732,18 +722,6 @@ app.use(function (req, res, next) {
             try {
                 checkLogin(socket);
 
-                // tag has no user_id column (it is shared upstream), so instead
-                // of a blanket delete only allow removing a tag that this user
-                // actually uses. Otherwise any user could delete another's tag.
-                const inUse = await R.getRow(
-                    `SELECT id FROM monitor_tag WHERE tag_id = ?
-                     AND monitor_id IN (SELECT id FROM monitor WHERE user_id = ?) LIMIT 1`,
-                    [ tagID, socket.userID ]
-                );
-
-                if (!inUse) {
-                    throw new Error("You do not own this.");
-                }
 
                 await R.exec("DELETE FROM tag WHERE id = ? ", [ tagID ]);
 
@@ -764,7 +742,6 @@ app.use(function (req, res, next) {
             try {
                 checkLogin(socket);
 
-                await assertOwnsMonitor(socket.userID, monitorID);
 
                 await R.exec("INSERT INTO monitor_tag (tag_id, monitor_id, value) VALUES (?, ?, ?)", [
                     tagID,
@@ -791,7 +768,6 @@ app.use(function (req, res, next) {
             try {
                 checkLogin(socket);
 
-                await assertOwnsMonitor(socket.userID, monitorID);
 
                 await R.exec("UPDATE monitor_tag SET value = ? WHERE tag_id = ? AND monitor_id = ?", [
                     value,
@@ -818,7 +794,6 @@ app.use(function (req, res, next) {
             try {
                 checkLogin(socket);
 
-                await assertOwnsMonitor(socket.userID, monitorID);
 
                 await R.exec("DELETE FROM monitor_tag WHERE tag_id = ? AND monitor_id = ? AND value = ?", [
                     tagID,
@@ -1057,13 +1032,8 @@ app.use(function (req, res, next) {
 
                 log.info("manage", `Clear Events Monitor: ${monitorID} User ID: ${socket.userID}`);
 
-                await assertOwnsMonitor(socket.userID, monitorID);
 
-                await R.exec(
-                    `UPDATE heartbeat SET msg = ?, important = ?
-                     WHERE monitor_id IN (SELECT id FROM monitor WHERE id = ? AND user_id = ?)`,
-                    [ "", "0", monitorID, socket.userID ]
-                );
+                await R.exec("UPDATE heartbeat SET msg = ?, important = ? WHERE monitor_id = ? ", ["", "0", monitorID]);
 
                 callback({
                     ok: true,
@@ -1082,14 +1052,13 @@ app.use(function (req, res, next) {
 
                 log.info("manage", `Clear Heartbeats Monitor: ${monitorID} User ID: ${socket.userID}`);
 
-                await assertOwnsMonitor(socket.userID, monitorID);
 
                 await UptimeCalculator.clearStatistics(monitorID);
 
                 if (monitorID in server.monitorList) {
                     const monitor = server.monitorList[monitorID];
                     if (monitor.active) {
-                        await restartMonitor(socket.userID, monitorID);
+                        await monitorService.restartMonitor(monitorID);
                     }
                 }
 
@@ -1112,14 +1081,14 @@ app.use(function (req, res, next) {
 
                 log.info("manage", `Clear Statistics User ID: ${socket.userID}`);
 
-                // Scoped to this user: clearAllStatistics() wipes every user's data.
-                await UptimeCalculator.clearStatisticsForUser(socket.userID);
+                // Shared instance: statistics are global, so this clears every
+                // monitor and restarts all of them.
+                await UptimeCalculator.clearStatisticsForUser();
 
-                // Restart only this user's monitors to reset their stats.
                 for (let monitorID in server.monitorList) {
                     const monitor = server.monitorList[monitorID];
-                    if (monitor.active && monitor.user_id === socket.userID) {
-                        await restartMonitor(socket.userID, monitorID);
+                    if (monitor.active) {
+                        await monitorService.restartMonitor(monitorID);
                     }
                 }
 
@@ -1191,36 +1160,6 @@ app.use(function (req, res, next) {
     await cloudflaredAutoStart(cloudflaredToken);
 })();
 
-/**
- * @deprecated Use monitorService.startMonitor.
- * @param {string} userID Owner
- * @param {number} monitorID Monitor to start
- * @returns {Promise<void>}
- */
-async function startMonitor(userID, monitorID) {
-    return monitorService.startMonitor(userID, monitorID);
-}
-
-/**
- * @deprecated Use monitorService.restartMonitor.
- * @param {string} userID Owner
- * @param {number} monitorID Monitor to restart
- * @returns {Promise<void>}
- */
-async function restartMonitor(userID, monitorID) {
-    return monitorService.restartMonitor(userID, monitorID);
-}
-
-/**
- * @deprecated Use monitorService.pauseMonitor.
- * @param {string} userID Owner
- * @param {number} monitorID Monitor to pause
- * @returns {Promise<void>}
- */
-async function pauseMonitor(userID, monitorID) {
-    return monitorService.pauseMonitor(userID, monitorID);
-}
-
 
 /**
  * Function called after user login
@@ -1232,6 +1171,11 @@ async function pauseMonitor(userID, monitorID) {
 async function afterLogin(socket, user) {
     socket.userID = user.id;
     socket.join(user.id);
+
+    // Shared instance: monitors, notifications, maintenance, proxies and
+    // containers are visible to every user, so live updates go to a common
+    // room. API keys and invites stay in the per-user room above.
+    socket.join(SHARED_ROOM);
 
     let monitorList = await server.sendMonitorList(socket);
     await Promise.allSettled([

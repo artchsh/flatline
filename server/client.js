@@ -6,6 +6,7 @@ const { R } = require("redbean-node");
 const { UptimeKumaServer } = require("./uptime-kuma-server");
 const server = UptimeKumaServer.getInstance();
 const io = server.io;
+const { SHARED_ROOM } = require("./shared-room");
 const { setting } = require("./util-server");
 const checkVersion = require("./check-version");
 const Database = require("./database");
@@ -28,7 +29,7 @@ async function sendNotificationList(socket) {
         result.push(notificationObject);
     }
 
-    io.to(socket.userID).emit("notificationList", result);
+    io.to(SHARED_ROOM).emit("notificationList", result);
 
     timeLogger.print("Send Notification List");
 
@@ -57,7 +58,7 @@ async function sendHeartbeatList(socket, monitorID, toUser = false, overwrite = 
     let result = list.reverse();
 
     if (toUser) {
-        io.to(socket.userID).emit("heartbeatList", monitorID, result, overwrite);
+        io.to(SHARED_ROOM).emit("heartbeatList", monitorID, result, overwrite);
     } else {
         socket.emit("heartbeatList", monitorID, result, overwrite);
     }
@@ -90,7 +91,7 @@ async function sendImportantHeartbeatList(socket, monitorID, toUser = false, ove
     const result = list.map((bean) => bean.toJSON());
 
     if (toUser) {
-        io.to(socket.userID).emit("importantHeartbeatList", monitorID, result, overwrite);
+        io.to(SHARED_ROOM).emit("importantHeartbeatList", monitorID, result, overwrite);
     } else {
         socket.emit("importantHeartbeatList", monitorID, result, overwrite);
     }
@@ -105,7 +106,7 @@ async function sendProxyList(socket) {
     const timeLogger = new TimeLogger();
 
     const list = await R.find("proxy");
-    io.to(socket.userID).emit(
+    io.to(SHARED_ROOM).emit(
         "proxyList",
         list.map((bean) => bean.export())
     );
@@ -177,7 +178,7 @@ async function sendDockerHostList(socket) {
         result.push(bean.toJSON());
     }
 
-    io.to(socket.userID).emit("dockerHostList", result);
+    io.to(SHARED_ROOM).emit("dockerHostList", result);
 
     timeLogger.print("Send Docker Host List");
 
@@ -199,7 +200,7 @@ async function sendRemoteBrowserList(socket) {
         result.push(bean.toJSON());
     }
 
-    io.to(socket.userID).emit("remoteBrowserList", result);
+    io.to(SHARED_ROOM).emit("remoteBrowserList", result);
 
     timeLogger.print("Send Remote Browser List");
 
@@ -232,7 +233,7 @@ async function sendMonitorTypeList(socket) {
         ];
     });
 
-    io.to(socket.userID).emit("monitorTypeList", Object.fromEntries(result));
+    io.to(SHARED_ROOM).emit("monitorTypeList", Object.fromEntries(result));
 }
 
 module.exports = {

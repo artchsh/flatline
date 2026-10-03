@@ -3,6 +3,7 @@ const { CloudflaredTunnel } = require("node-cloudflared-tunnel");
 const { UptimeKumaServer } = require("../uptime-kuma-server");
 const { log } = require("../../src/util");
 const { doubleCheckPassword } = require("../better-auth");
+const { SHARED_ROOM } = require("../shared-room");
 const io = UptimeKumaServer.getInstance().io;
 
 const prefix = "cloudflared_";
@@ -38,9 +39,9 @@ module.exports.cloudflaredSocketHandler = (socket) => {
         try {
             checkLogin(socket);
             socket.join("cloudflared");
-            io.to(socket.userID).emit(prefix + "installed", cloudflared.checkInstalled());
-            io.to(socket.userID).emit(prefix + "running", cloudflared.running);
-            io.to(socket.userID).emit(prefix + "token", await setting("cloudflaredTunnelToken"));
+            io.to(SHARED_ROOM).emit(prefix + "installed", cloudflared.checkInstalled());
+            io.to(SHARED_ROOM).emit(prefix + "running", cloudflared.running);
+            io.to(SHARED_ROOM).emit(prefix + "token", await setting("cloudflaredTunnelToken"));
         } catch (error) {
             log.error("cloudflared", "Error in join handler: " + error.message);
         }

@@ -19,6 +19,7 @@ const { UptimeKumaServer } = require("../uptime-kuma-server");
 const { UptimeCalculator } = require("../uptime-calculator");
 const Monitor = require("../model/monitor");
 const monitorService = require("../monitor-service");
+const { SHARED_ROOM } = require("../shared-room");
 const openApiDocument = require("./openapi.json");
 const { UP, DOWN, PENDING, MAINTENANCE, flipStatus } = require("../../src/util");
 
@@ -291,10 +292,12 @@ function paginationMeta(pagination, total) {
 }
 
 /**
- * Load a monitor belonging to the authenticated user.
+ * Load a monitor by id.
  *
- * The `user_id` check is what stops one token reading another's monitors.
- * @param {express.Request} req Express request, carries `apiUser`
+ * Not filtered on user_id: Flatline is a shared instance, so any valid token
+ * may read and change any monitor. Tokens are still per-user, so this bounds
+ * who can reach the API at all.
+ * @param {express.Request} req Express request
  * @param {express.Response} res Express response
  * @param {string} idParam Raw monitor id
  * @returns {Promise<?Bean>} The monitor, or null after responding with an error
@@ -307,7 +310,7 @@ async function loadMonitor(req, res, idParam) {
         return null;
     }
 
-    const monitor = await R.findOne("monitor", " id = ? AND user_id = ? ", [ id, req.apiUser ]);
+    const monitor = await R.findOne("monitor", " id = ? ", [ id ]);
 
     if (!monitor) {
         fail(res, 404, "not_found", `No monitor with id ${id}.`);
@@ -422,8 +425,9 @@ router.get("/api/v1/monitors", tokenAuth("read"), async (req, res) => {
             return;
         }
 
-        const where = [ "user_id = ?" ];
-        const params = [ req.apiUser ];
+        // Shared instance: every monitor is visible to every user.
+        const where = [];
+        const params = [];
 
         if (req.query.tag !== undefined) {
             const tagID = parseId(req.query.tag);
@@ -450,7 +454,7 @@ router.get("/api/v1/monitors", tokenAuth("read"), async (req, res) => {
             params.push(like, like);
         }
 
-        const whereSQL = ` WHERE ${where.join(" AND ")}`;
+        const whereSQL = where.length > 0 ? ` WHERE ${where.join(" AND ")}` : "";
 
         const { total } = await R.getRow(`SELECT COUNT(*) AS total FROM monitor${whereSQL}`, params);
 
@@ -465,7 +469,7 @@ router.get("/api/v1/monitors", tokenAuth("read"), async (req, res) => {
 
         const result = [];
         for (const row of rows) {
-            const monitor = await R.findOne("monitor", " id = ? AND user_id = ? ", [ row.id, req.apiUser ]);
+            const monitor = await R.findOne("monitor", " id = ? ", [ row.id ]);
             if (!monitor) {
                 continue;
             }
@@ -642,7 +646,7 @@ router.patch("/api/v1/monitors/:id", tokenAuth("write"), async (req, res) => {
 
         // Only keys present in the payload are written, so a partial PATCH
         // leaves every other field untouched.
-        const updated = await monitorService.updateMonitor(req.apiUser, monitor.id, payload, {
+        const updated = await monitorService.updateMonitor(monitor.id, payload, {
             notificationIDList: body.notificationIDList ?? null,
         });
 
@@ -681,7 +685,7 @@ router.delete("/api/v1/monitors/:id", tokenAuth("write"), async (req, res) => {
         // otherwise they are unlinked and kept.
         const deleteChildren = req.query.deleteChildren === "true";
 
-        const deleted = await monitorService.deleteMonitor(req.apiUser, monitor.id, deleteChildren);
+        const deleted = await monitorService.deleteMonitor(monitor.id, deleteChildren);
 
         for (const id of deleted) {
             server.io.to(req.apiUser).emit("deleteMonitorFromList", id);
@@ -824,8 +828,8 @@ router.post("/api/v1/monitors/:id/heartbeat", tokenAuth("write"), async (req, re
         await R.store(bean);
 
         // Push to any connected UI, and fire notifications on state change.
-        server.io.to(monitor.user_id).emit("heartbeat", bean.toJSON());
-        Monitor.sendStats(server.io, monitor.id, monitor.user_id);
+        server.io.to(SHARED_ROOM).emit("heartbeat", bean.toJSON());
+        Monitor.sendStats(server.io, monitor.id);
 
         if (Monitor.isImportantForNotification(isFirstBeat, previousHeartbeat?.status, bean.status)) {
             await Monitor.sendNotification(isFirstBeat, monitor, bean);
@@ -1075,10 +1079,8 @@ router.get("/api/v1/status-pages", tokenAuth("read"), async (req, res) => {
  */
 router.get("/api/v1/maintenance", tokenAuth("read"), async (req, res) => {
     try {
-        const windows = await R.getAll(
-            "SELECT * FROM maintenance WHERE user_id = ? ORDER BY start_date DESC",
-            [ req.apiUser ]
-        );
+        // Shared instance: maintenance windows are visible to every user.
+        const windows = await R.getAll("SELECT * FROM maintenance ORDER BY start_date DESC");
         res.json({
             ok: true,
             count: windows.length,
@@ -1106,16 +1108,12 @@ router.get("/api/v1/maintenance", tokenAuth("read"), async (req, res) => {
  */
 router.get("/api/v1/tags", tokenAuth("read"), async (req, res) => {
     try {
-        // The tag table has no user_id either: tags are global and reached from
-        // a monitor via monitor_tag. Return only tags this user actually uses,
-        // so the list still reflects their own monitors.
+        // Shared instance: every tag in use by any monitor is listed. The tag
+        // table has no user_id column upstream.
         const tags = await R.getAll(
             `SELECT DISTINCT tag.id, tag.name, tag.color FROM tag
              JOIN monitor_tag ON monitor_tag.tag_id = tag.id
-             JOIN monitor ON monitor.id = monitor_tag.monitor_id
-             WHERE monitor.user_id = ?
-             ORDER BY tag.name`,
-            [ req.apiUser ]
+             ORDER BY tag.name`
         );
 
         res.json({
@@ -1141,7 +1139,8 @@ router.get("/api/v1/tags", tokenAuth("read"), async (req, res) => {
  */
 router.get("/api/v1/notifications", tokenAuth("read"), async (req, res) => {
     try {
-        const notifications = await R.getAll("SELECT * FROM notification WHERE user_id = ? ORDER BY id", [ req.apiUser ]);
+        // Shared instance: notification configs are visible to every user.
+        const notifications = await R.getAll("SELECT * FROM notification ORDER BY id");
 
         res.json({
             ok: true,
@@ -1181,7 +1180,8 @@ router.get("/api/v1/notifications", tokenAuth("read"), async (req, res) => {
  */
 router.get("/api/v1/health", tokenAuth("read"), async (req, res) => {
     try {
-        const rows = await R.getAll("SELECT id, active FROM monitor WHERE user_id = ?", [ req.apiUser ]);
+        // Shared instance: the summary covers every monitor on the instance.
+        const rows = await R.getAll("SELECT id, active FROM monitor");
 
         const summary = { total: rows.length, up: 0, down: 0, pending: 0, maintenance: 0, paused: 0, downMonitors: [] };
 

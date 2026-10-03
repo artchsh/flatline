@@ -24,9 +24,9 @@ Run `npm run lint` and `npm test` locally — nothing enforces it for you anymor
 
 | Goal | Status |
 |---|---|
-| Rebrand to **Flatline** (cyberpunk theme) | Planned |
+| Rebrand to **Flatline** | **Done** |
 | Frontend rework (optional, maybe Next.js + shadcn) | Deferred / optional |
-| Multi-user, no roles (admin-issued single-use invite links) | Planned |
+| Multi-user, no roles (admin-issued single-use invite links) | **Done** |
 | Telegram-only notifications | **Done** (needs manual test) |
 | Agentic REST API with tokens | **Done** (verified end to end) |
 
@@ -129,9 +129,82 @@ Bonus: better-auth already solved one hard problem for free — magic-link token
 atomic (`consumeVerificationValue`), and it supports `storeToken: "hashed"`. Worth copying that
 shape (hash at rest, atomic consume) into our own implementation.
 
-### Plan — DONE
+### Shared instance — DONE
 
-- [x] Migration `2026-10-03-0100-user-invite.js`: `user_invite` with `token_hash`
+Multi-user is for **sharing panel access**, not for dividing ownership. Every logged-in
+user sees and edits the same monitors, notifications, maintenance windows, proxies,
+containers and tags. This reverts the per-user model inherited from upstream.
+
+Kept per-user (deliberately):
+
+- `user_invite` — each invite lists only under the admin who minted it
+- `api_key` — a token belongs to the user who created it, and is the audit trail
+- `better_auth_user` — obviously
+
+`monitor.user_id` (and the equivalents) are still **written** on create, purely to record
+who added something. They are never used to filter. No migration needed, so an existing
+upstream database migrates as-is.
+
+### Why the socket rooms had to change too
+
+Upstream joins each socket to a per-user room and emits every update with
+`io.to(socket.userID)`. Dropping the SQL filters alone would have left user B with a
+correct-looking dashboard that never updated. So:
+
+- new `server/shared-room.js` exports `SHARED_ROOM = "flatline:shared"`
+- `afterLogin` joins **both** rooms (per-user for tokens/invites, shared for everything else)
+- ~25 emit sites moved from `io.to(socket.userID)` / `io.to(monitor.user_id)` to
+  `io.to(SHARED_ROOM)`: monitorList, heartbeat, avgPing, uptime, certInfo, domainInfo,
+  notificationList, maintenanceList, proxyList, dockerHostList, remoteBrowserList,
+  monitorTypeList, heartbeatList, importantHeartbeatList, statusPageList, cloudflared
+- unauthenticated sockets never join `SHARED_ROOM`, so the login and status pages cannot
+  receive dashboard data
+
+### Query and signature changes
+
+- `monitor-service`: `loadOwnedMonitor(userID, id)` → `loadMonitor(id)`;
+  `updateMonitor`/`deleteMonitor`/`startMonitor`/`restartMonitor`/`pauseMonitor`/
+  `updateMonitorNotification` all lost their `userID` parameter. `createMonitor` keeps it,
+  because it records the creator.
+- `Monitor.deleteMonitor` / `deleteMonitorRecursively`: dropped the `user_id` predicate.
+- `Monitor.sendStats` / `sendCertInfo` / `sendDomainInfo`: dropped `userID`, broadcast to
+  the shared room.
+- `getMonitorJSONList(userID, monitorID)` keeps its arity but ignores the first argument,
+  so existing call sites are untouched.
+- `sendMaintenanceListByUserID` is now an alias of `sendMaintenanceList`.
+- `clearStatisticsForUser()` is now instance-wide, matching `clearAllStatistics()`.
+- REST v1: `loadMonitor`, the monitors list, maintenance, tags, notifications and the
+  health summary are no longer filtered; tokens remain per-user.
+- Removed `server/socket-handlers/ownership.js` and its call sites wholesale.
+
+### Verified against a simulated upstream migration
+
+Seeded a database the way an existing install looks: one admin owning three monitors, then a
+**new** user created afterwards. Against a running server:
+
+- original admin sees 3 monitors
+- **the newly invited user also sees all 3** — the migration requirement
+- the invited user edits the original admin's monitor → `ok: true`
+- the original admin receives that edit as a **live** push (proves the shared room)
+- the invited user reads the original admin's chart data → `ok: true`
+
+14 new tests in `test/backend-test/test-shared-instance.ts`, including a source-level guard
+that fails if anyone re-adds a `userID` parameter to the service functions. The old
+per-user isolation tests were deleted along with the behaviour they asserted.
+
+`lint:js` 0 errors, `vite build` clean, and the invite / api-v1 / monitor-service suites
+(14 + 17 + 11) still pass.
+
+### Still to do
+
+- [ ] Decide whether `settings` (entry page, cloudflared token, disable-auth) should also be
+      global. They are stored in a key/value table with no owner, so they already are.
+- [ ] `test-domain.js` has one test that posts to a `webhook` notification, removed with the
+      Telegram-only work. Repoint it at Telegram or delete it.
+
+---
+
+## Feature: invite links — DONE
       (unique), `created_by` (string FK to `better_auth_user.id`), `expires`,
       `used_at`, `used_by`, `note`.
 - [x] Model `server/model/user_invite.js`: create / findByToken / consume /

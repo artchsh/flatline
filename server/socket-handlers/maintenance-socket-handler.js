@@ -47,11 +47,8 @@ module.exports.maintenanceSocketHandler = (socket) => {
         try {
             checkLogin(socket);
 
+            // Shared instance: any logged-in user may edit any window.
             let bean = server.getMaintenance(maintenance.id);
-
-            if (bean.user_id !== socket.userID) {
-                throw new Error("Permission denied.");
-            }
 
             await Maintenance.jsonToBean(bean, maintenance);
             await R.store(bean);
@@ -143,7 +140,7 @@ module.exports.maintenanceSocketHandler = (socket) => {
 
             log.debug("maintenance", `Get Maintenance: ${maintenanceID} User ID: ${socket.userID}`);
 
-            let bean = await R.findOne("maintenance", " id = ? AND user_id = ? ", [maintenanceID, socket.userID]);
+            let bean = await R.findOne("maintenance", " id = ? ", [maintenanceID]);
 
             callback({
                 ok: true,
@@ -232,7 +229,7 @@ module.exports.maintenanceSocketHandler = (socket) => {
                 delete server.maintenanceList[maintenanceID];
             }
 
-            await R.exec("DELETE FROM maintenance WHERE id = ? AND user_id = ? ", [maintenanceID, socket.userID]);
+            await R.exec("DELETE FROM maintenance WHERE id = ? ", [maintenanceID]);
 
             apicache.clear();
 

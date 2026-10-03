@@ -64,7 +64,7 @@ class Notification {
         let bean;
 
         if (notificationID) {
-            bean = await R.findOne("notification", " id = ? AND user_id = ? ", [notificationID, userID]);
+            bean = await R.findOne("notification", " id = ? ", [notificationID]);
 
             if (!bean) {
                 throw new Error("notification not found");
@@ -84,7 +84,7 @@ class Notification {
         await R.store(bean);
 
         if (applyExisting) {
-            await applyNotificationEveryMonitor(bean.id, userID);
+            await applyNotificationEveryMonitor(bean.id);
         }
 
         return bean;
@@ -97,7 +97,7 @@ class Notification {
      * @returns {Promise<void>}
      */
     static async delete(notificationID, userID) {
-        let bean = await R.findOne("notification", " id = ? AND user_id = ? ", [notificationID, userID]);
+        let bean = await R.findOne("notification", " id = ? ", [notificationID]);
 
         if (!bean) {
             throw new Error("notification not found");
@@ -110,12 +110,14 @@ class Notification {
 
 /**
  * Apply the notification to every monitor
+ *
+ * Shared instance: every monitor on the instance is linked, not just the ones
+ * belonging to the user who created the notification.
  * @param {number} notificationID ID of notification to apply
- * @param {number} userID ID of user who created notification
  * @returns {Promise<void>}
  */
-async function applyNotificationEveryMonitor(notificationID, userID) {
-    let monitors = await R.getAll("SELECT id FROM monitor WHERE user_id = ?", [userID]);
+async function applyNotificationEveryMonitor(notificationID) {
+    let monitors = await R.getAll("SELECT id FROM monitor");
 
     for (let i = 0; i < monitors.length; i++) {
         let checkNotification = await R.findOne("monitor_notification", " monitor_id = ? AND notification_id = ? ", [

@@ -876,26 +876,15 @@ class UptimeCalculator {
     }
 
     /**
-     * Clear statistics and heartbeats for one user's monitors only.
+     * Clear statistics and heartbeats for every monitor.
      *
-     * Heartbeat and stat rows have no user_id, so they are reached through a
-     * sub-select on monitor. In-memory caches are dropped per monitor.
-     * @param {string} userID Owner whose data should be cleared
+     * Flatline is a shared instance, so this is identical to
+     * clearAllStatistics() with a per-monitor cache purge; it exists as a
+     * separate name because the socket handler used to be per-user.
      * @returns {Promise<void>}
      */
-    static async clearStatisticsForUser(userID) {
-        const owned = "monitor_id IN (SELECT id FROM monitor WHERE user_id = ?)";
-
-        await R.exec(`DELETE FROM heartbeat WHERE ${owned}`, [ userID ]);
-        await R.exec(`DELETE FROM stat_minutely WHERE ${owned}`, [ userID ]);
-        await R.exec(`DELETE FROM stat_hourly WHERE ${owned}`, [ userID ]);
-        await R.exec(`DELETE FROM stat_daily WHERE ${owned}`, [ userID ]);
-
-        // Drop the cached calculators so the next read starts empty.
-        const monitors = await R.getAll("SELECT id FROM monitor WHERE user_id = ?", [ userID ]);
-        for (const monitor of monitors) {
-            await UptimeCalculator.remove(monitor.id);
-        }
+    static async clearStatisticsForUser() {
+        await UptimeCalculator.clearAllStatistics();
     }
 }
 

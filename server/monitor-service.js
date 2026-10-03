@@ -2,9 +2,14 @@
  * Shared monitor create/update/delete logic.
  *
  * Both the Socket.IO handlers in server.js and REST API v1 go through this
- * module, so the two surfaces cannot drift apart. Every function here takes
- * an explicit `userID` and enforces ownership; nothing trusts caller-supplied
- * ownership.
+ * module, so the two surfaces cannot drift apart.
+ *
+ * Flatline is a shared instance: every logged-in user sees and edits the same
+ * monitors, so these functions do not filter on `user_id`. That column is
+ * still written on create, purely to record who added a monitor.
+ *
+ * `createMonitor` is the one exception and takes a `userID`, because it records
+ * the creator.
  */
 const { R } = require("redbean-node");
 const { log } = require("../src/util");
@@ -54,40 +59,26 @@ const JSON_SERIALISED_FIELDS = [
 ];
 
 /**
- * Load a monitor and assert the user owns it.
- * @param {string} userID ID of the owning user
+ * Load a monitor by id.
+ *
+ * Flatline is a shared instance: there are no roles and `user_id` is recorded
+ * only as "who created this" for the audit trail. It is deliberately not
+ * filtered on, so every user sees the same set.
  * @param {number} monitorID Monitor to load
- * @returns {Promise<Bean>} The monitor bean
- * @throws {Error} If the monitor does not exist or is owned by someone else
+ * @returns {Promise<?Bean>} The monitor bean, or null if it does not exist
  */
-async function loadOwnedMonitor(userID, monitorID) {
-    const monitor = await R.findOne("monitor", " id = ? AND user_id = ? ", [ monitorID, userID ]);
-
-    if (!monitor) {
-        // Deliberately the same message for "missing" and "not yours" so the
-        // API cannot be used to probe which monitor ids exist.
-        throw new Error("You do not own this monitor.");
-    }
-
-    return monitor;
+async function loadMonitor(monitorID) {
+    return await R.findOne("monitor", " id = ? ", [ monitorID ]);
 }
 
 /**
  * Replace a monitor's notification links.
- * @param {string} userID Owner of the monitor, used to scope the delete
  * @param {number} monitorID Monitor to update
  * @param {{[key: string]: boolean}} notificationIDList Map of notification id -> enabled
  * @returns {Promise<void>}
  */
-async function updateMonitorNotification(userID, monitorID, notificationIDList) {
-    // DELETE ... WHERE monitor_id = ? AND user_id IN (SELECT id FROM monitor WHERE user_id = ?)
-    // The sub-select keeps this safe even if the caller skipped the ownership
-    // check: it can only ever remove links on the caller's own monitor.
-    await R.exec(
-        `DELETE FROM monitor_notification WHERE monitor_id IN
-         (SELECT id FROM monitor WHERE id = ? AND user_id = ?)`,
-        [ monitorID, userID ]
-    );
+async function updateMonitorNotification(monitorID, notificationIDList) {
+    await R.exec("DELETE FROM monitor_notification WHERE monitor_id = ? ", [ monitorID ]);
 
     for (const notificationID in notificationIDList) {
         if (notificationIDList[notificationID]) {
@@ -190,7 +181,7 @@ function applyIntervalDefaults(payload) {
 
 /**
  * Create a monitor.
- * @param {string} userID ID of the owning user
+ * @param {string} userID Creator, recorded for the audit trail only
  * @param {object} payload Monitor fields
  * @param {object} options Behaviour switches
  * @param {boolean} options.start Run the check loop immediately when active
@@ -205,7 +196,8 @@ async function createMonitor(userID, payload, options = {}) {
     const bean = R.dispense("monitor");
     bean.import(cleaned);
 
-    // Ownership is never taken from the payload.
+    // Recorded as the creator, never taken from the payload, and never used to
+    // filter: this is a shared instance.
     bean.user_id = userID;
 
     if (cleaned.retry_only_on_status_code_failure !== undefined) {
@@ -217,13 +209,13 @@ async function createMonitor(userID, payload, options = {}) {
     await R.store(bean);
 
     if (notificationIDList) {
-        await updateMonitorNotification(userID, bean.id, notificationIDList);
+        await updateMonitorNotification(bean.id, notificationIDList);
     }
 
-    log.info("monitor", `Added Monitor: ${bean.id} User ID: ${userID}`);
+    log.info("monitor", `Added Monitor: ${bean.id} Created by User ID: ${userID}`);
 
     if (start && bean.active !== false) {
-        await startMonitor(userID, bean.id);
+        await startMonitor(bean.id);
     }
 
     return bean;
@@ -235,17 +227,21 @@ async function createMonitor(userID, payload, options = {}) {
  * Only keys present in the payload are touched, so a partial REST PATCH does
  * not blank out fields it did not mention. The Vue form always sends the full
  * object, which behaves the same way.
- * @param {string} userID ID of the owning user
  * @param {number} monitorID Monitor to update
  * @param {object} payload Monitor fields to change
  * @param {object} options Behaviour switches
  * @param {{[key: string]: boolean}} options.notificationIDList Notification links
  * @returns {Promise<Bean>} The stored monitor
  */
-async function updateMonitor(userID, monitorID, payload, options = {}) {
+async function updateMonitor(monitorID, payload, options = {}) {
     const { notificationIDList = null } = options;
 
-    const bean = await loadOwnedMonitor(userID, monitorID);
+    const bean = await loadMonitor(monitorID);
+
+    if (!bean) {
+        throw new Error("No such monitor.");
+    }
+
     const cleaned = normaliseMonitorPayload(payload);
 
     // A parent pointing at itself, or at one of its own descendants, would build
@@ -269,7 +265,7 @@ async function updateMonitor(userID, monitorID, payload, options = {}) {
     }
 
     for (const [ key, value ] of Object.entries(cleaned)) {
-        // Never let a payload reassign ownership or the primary key.
+        // Never let a payload reassign the recorded creator or the primary key.
         if (key === "user_id" || key === "id") {
             continue;
         }
@@ -297,15 +293,15 @@ async function updateMonitor(userID, monitorID, payload, options = {}) {
     }
 
     if (notificationIDList) {
-        await updateMonitorNotification(userID, bean.id, notificationIDList);
+        await updateMonitorNotification(bean.id, notificationIDList);
     }
 
-    log.info("monitor", `Edited Monitor: ${bean.id} User ID: ${userID}`);
+    log.info("monitor", `Edited Monitor: ${bean.id}`);
 
     // Pick up new config immediately; otherwise the old loop keeps running
     // with stale settings until the next restart.
     if (await Monitor.isActive(bean.id, bean.active)) {
-        await startMonitor(userID, bean.id);
+        await startMonitor(bean.id);
     }
 
     return bean;
@@ -313,13 +309,12 @@ async function updateMonitor(userID, monitorID, payload, options = {}) {
 
 /**
  * Delete a monitor, optionally recursing into group children.
- * @param {string} userID ID of the owning user
  * @param {number} monitorID Monitor to delete
  * @param {boolean} deleteChildren For groups, also delete descendants
  * @returns {Promise<number[]>} IDs of every monitor removed
  */
-async function deleteMonitor(userID, monitorID, deleteChildren = false) {
-    const monitor = await R.findOne("monitor", " id = ? AND user_id = ? ", [ monitorID, userID ]);
+async function deleteMonitor(monitorID, deleteChildren = false) {
+    const monitor = await loadMonitor(monitorID);
     const deleted = [];
 
     if (monitor && monitor.type === "group") {
@@ -328,7 +323,7 @@ async function deleteMonitor(userID, monitorID, deleteChildren = false) {
         if (deleteChildren) {
             if (children && children.length > 0) {
                 for (const child of children) {
-                    deleted.push(...await deleteMonitor(userID, child.id, deleteChildren));
+                    deleted.push(...await deleteMonitor(child.id, deleteChildren));
                 }
             }
         } else {
@@ -337,26 +332,27 @@ async function deleteMonitor(userID, monitorID, deleteChildren = false) {
         }
     }
 
-    await Monitor.deleteMonitor(monitorID, userID);
+    await Monitor.deleteMonitor(monitorID);
     deleted.push(monitorID);
 
-    log.info("manage", `Delete Monitor: ${monitorID} User ID: ${userID}`);
+    log.info("manage", `Delete Monitor: ${monitorID}`);
 
     return deleted;
 }
 
 /**
  * Start (or restart) a monitor's check loop and mark it active.
- * @param {string} userID ID of the owning user
  * @param {number} monitorID Monitor to start
  * @returns {Promise<Bean>} The monitor
  */
-async function startMonitor(userID, monitorID) {
-    await loadOwnedMonitor(userID, monitorID);
+async function startMonitor(monitorID) {
+    const monitor = await loadMonitor(monitorID);
 
-    await R.exec("UPDATE monitor SET active = 1 WHERE id = ? AND user_id = ? ", [ monitorID, userID ]);
+    if (!monitor) {
+        throw new Error("No such monitor.");
+    }
 
-    const monitor = await R.findOne("monitor", " id = ? ", [ monitorID ]);
+    await R.exec("UPDATE monitor SET active = 1 WHERE id = ? ", [ monitorID ]);
 
     const server = UptimeKumaServer.getInstance();
     if (monitor.id in server.monitorList) {
@@ -371,24 +367,20 @@ async function startMonitor(userID, monitorID) {
 
 /**
  * Restart a monitor's check loop.
- * @param {string} userID ID of the owning user
  * @param {number} monitorID Monitor to restart
  * @returns {Promise<Bean>} The monitor
  */
-async function restartMonitor(userID, monitorID) {
-    return await startMonitor(userID, monitorID);
+async function restartMonitor(monitorID) {
+    return await startMonitor(monitorID);
 }
 
 /**
  * Pause a monitor and stop its check loop.
- * @param {string} userID ID of the owning user
  * @param {number} monitorID Monitor to pause
  * @returns {Promise<void>}
  */
-async function pauseMonitor(userID, monitorID) {
-    await loadOwnedMonitor(userID, monitorID);
-
-    await R.exec("UPDATE monitor SET active = 0 WHERE id = ? AND user_id = ? ", [ monitorID, userID ]);
+async function pauseMonitor(monitorID) {
+    await R.exec("UPDATE monitor SET active = 0 WHERE id = ? ", [ monitorID ]);
 
     const server = UptimeKumaServer.getInstance();
     if (monitorID in server.monitorList) {
@@ -404,7 +396,7 @@ module.exports = {
     startMonitor,
     restartMonitor,
     pauseMonitor,
-    loadOwnedMonitor,
+    loadMonitor,
     updateMonitorNotification,
     normaliseMonitorPayload,
     applyIntervalDefaults,
