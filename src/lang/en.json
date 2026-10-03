@@ -1668,5 +1668,10 @@
     "Ban": "Ban",
     "Unban": "Unban",
     "Banned": "Banned",
-    "You": "You"
+    "You": "You",
+    "Active Incidents": "Active incidents",
+    "Recent Incidents": "Recent incidents",
+    "statusPageIncident-active": "Investigating",
+    "statusPageMonitorCountLabel": "monitors",
+    "statusPageStatus-unknown": "Status unavailable"
 }

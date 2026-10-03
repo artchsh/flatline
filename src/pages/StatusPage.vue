@@ -310,8 +310,41 @@
                 @cancel="cancelIncident"
             />
 
-            <!-- Active Pinned Incidents -->
-            <template v-for="activeIncident in activeIncidents" :key="activeIncident.id">
+            <!-- Overall Status -->
+            <div class="status-hero" :class="overallStatusClass">
+                <div class="status-hero-inner">
+                    <span class="status-hero-dot" aria-hidden="true"></span>
+                    <span class="status-hero-label">
+                        <template v-if="Object.keys($root.publicMonitorList).length === 0 && loadedData">
+                            {{ $t("No Services") }}
+                        </template>
+                        <template v-else-if="allUp">
+                            {{ $t("All Systems Operational") }}
+                        </template>
+                        <template v-else-if="partialDown">
+                            {{ $t("Partially Degraded Service") }}
+                        </template>
+                        <template v-else-if="allDown">
+                            {{ $t("Degraded Service") }}
+                        </template>
+                        <template v-else-if="isMaintenance">
+                            {{ $t("maintenanceStatus-under-maintenance") }}
+                        </template>
+                        <template v-else>
+                            {{ $t("statusPageStatus-unknown") }}
+                        </template>
+                    </span>
+                </div>
+                <div v-if="Object.keys($root.publicMonitorList).length > 0" class="status-hero-meta">
+                    <span>{{ $root.publicMonitorList.length }} {{ $t("statusPageMonitorCountLabel") }}</span>
+                </div>
+            </div>
+
+            <!-- Active Incidents -->
+            <section v-if="activeIncidents.length > 0" class="status-section">
+                <h2 class="status-section-title">{{ $t("Active Incidents") }}</h2>
+
+                <template v-for="activeIncident in activeIncidents" :key="activeIncident.id">
                 <!-- Edit mode for this specific incident -->
                 <IncidentEditForm
                     v-if="editIncidentMode && incident !== null && incident.id === activeIncident.id"
@@ -323,12 +356,17 @@
                 <!-- Display mode for this incident -->
                 <div
                     v-else
-                    class="shadow-box alert mb-4 p-4 incident"
+                    class="incident-card"
+                    :class="'incident-' + activeIncident.style"
                     role="alert"
-                    :class="'bg-' + activeIncident.style"
                     data-testid="incident"
                 >
-                    <h4 class="alert-heading" data-testid="incident-title">{{ activeIncident.title }}</h4>
+                    <div class="incident-card-head">
+                        <h3 class="incident-card-title" data-testid="incident-title">{{ activeIncident.title }}</h3>
+                        <span class="incident-badge" :class="'incident-badge-' + activeIncident.style">
+                            {{ $t("statusPageIncident-active") }}
+                        </span>
+                    </div>
                     <!-- eslint-disable vue/no-v-html -->
                     <div
                         class="content"
@@ -338,14 +376,15 @@
                     <!-- eslint-enable vue/no-v-html -->
 
                     <!-- Incident Date -->
-                    <div class="date mt-3">
-                        {{
-                            $t("dateCreatedAtFromNow", {
-                                date: $root.datetime(activeIncident.createdDate),
-                                fromNow: dateFromNow(activeIncident.createdDate),
-                            })
-                        }}
-                        <br />
+                    <div class="incident-card-dates">
+                        <span>
+                            {{
+                                $t("dateCreatedAtFromNow", {
+                                    date: $root.datetime(activeIncident.createdDate),
+                                    fromNow: dateFromNow(activeIncident.createdDate),
+                                })
+                            }}
+                        </span>
                         <span v-if="activeIncident.lastUpdatedDate">
                             {{
                                 $t("lastUpdatedAtFromNow", {
@@ -374,41 +413,8 @@
                         </button>
                     </div>
                 </div>
-            </template>
-
-            <!-- Overall Status -->
-            <div class="shadow-box list p-4 overall-status mb-4">
-                <div v-if="Object.keys($root.publicMonitorList).length === 0 && loadedData">
-                    <font-awesome-icon icon="question-circle" class="ok" />
-                    {{ $t("No Services") }}
-                </div>
-
-                <template v-else>
-                    <div v-if="allUp">
-                        <font-awesome-icon icon="check-circle" class="ok" />
-                        {{ $t("All Systems Operational") }}
-                    </div>
-
-                    <div v-else-if="partialDown">
-                        <font-awesome-icon icon="exclamation-circle" class="warning" />
-                        {{ $t("Partially Degraded Service") }}
-                    </div>
-
-                    <div v-else-if="allDown">
-                        <font-awesome-icon icon="times-circle" class="danger" />
-                        {{ $t("Degraded Service") }}
-                    </div>
-
-                    <div v-else-if="isMaintenance">
-                        <font-awesome-icon icon="wrench" class="status-maintenance" />
-                        {{ $t("maintenanceStatus-under-maintenance") }}
-                    </div>
-
-                    <div v-else>
-                        <font-awesome-icon icon="question-circle" style="color: #efefef" />
-                    </div>
                 </template>
-            </div>
+                </section>
 
             <!-- Maintenance -->
             <template v-if="maintenanceList.length > 0">
@@ -498,31 +504,27 @@
             </div>
 
             <!-- Past Incidents -->
-            <div v-if="pastIncidentCount > 0" class="past-incidents-section mb-4">
-                <h2 class="past-incidents-title mb-3">
-                    {{ $t("Past Incidents") }}
-                </h2>
+            <section v-if="pastIncidentCount > 0" class="status-section">
+                <h2 class="status-section-title">{{ $t("Recent Incidents") }}</h2>
 
                 <div class="past-incidents-content">
                     <div
                         v-for="(dateGroup, dateKey) in groupedIncidentHistory"
                         :key="dateKey"
-                        class="incident-date-group mb-4"
+                        class="incident-date-group"
                     >
-                        <h4 class="incident-date-header">{{ dateKey }}</h4>
-                        <div class="shadow-box incident-list-box">
-                            <IncidentHistory
-                                :incidents="dateGroup"
-                                :edit-mode="enableEditMode"
-                                :loading="incidentHistoryLoading"
-                                @edit-incident="$refs.incidentManageModal.showEdit($event)"
-                                @delete-incident="$refs.incidentManageModal.showDelete($event)"
-                                @resolve-incident="resolveIncident"
-                            />
-                        </div>
+                        <h3 class="incident-date-header">{{ dateKey }}</h3>
+                        <IncidentHistory
+                            :incidents="dateGroup"
+                            :edit-mode="enableEditMode"
+                            :loading="incidentHistoryLoading"
+                            @edit-incident="$refs.incidentManageModal.showEdit($event)"
+                            @delete-incident="$refs.incidentManageModal.showDelete($event)"
+                            @resolve-incident="resolveIncident"
+                        />
                     </div>
 
-                    <div v-if="incidentHistoryHasMore" class="load-more-controls d-flex justify-content-center mt-3">
+                    <div v-if="incidentHistoryHasMore" class="load-more-controls">
                         <button
                             class="btn btn-outline-secondary btn-sm"
                             :disabled="incidentHistoryLoading"
@@ -537,7 +539,7 @@
                         </button>
                     </div>
                 </div>
-            </div>
+            </section>
 
             <!-- Incident Manage Modal -->
             <IncidentManageModal
@@ -819,6 +821,36 @@ export default {
             }
 
             return status;
+        },
+
+        /**
+         * Modifier class for the status hero, so the accent colour follows the
+         * overall state rather than being hardcoded in the template.
+         * @returns {string} One of status-up, status-degraded, status-down,
+         * status-maintenance or status-unknown
+         */
+        overallStatusClass() {
+            if (Object.keys(this.$root.publicMonitorList).length === 0 && this.loadedData) {
+                return "status-unknown";
+            }
+
+            if (this.allUp) {
+                return "status-up";
+            }
+
+            if (this.partialDown) {
+                return "status-degraded";
+            }
+
+            if (this.allDown) {
+                return "status-down";
+            }
+
+            if (this.isMaintenance) {
+                return "status-maintenance";
+            }
+
+            return "status-unknown";
         },
 
         allUp() {
@@ -1508,21 +1540,204 @@ export default {
 <style lang="scss" scoped>
 @import "../assets/vars.scss";
 
-.overall-status {
-    font-weight: bold;
-    font-size: 25px;
+// ---------------------------------------------------------------------------
+// Status hero
+//
+// A single prominent block that answers "is anything broken?" at a glance,
+// in the spirit of cloudflarestatus.com and status.openai.com: one status
+// word, one colour, no competing indicators.
+// ---------------------------------------------------------------------------
 
-    .ok {
-        color: $primary;
-    }
+.status-hero {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 4px;
+    padding: 34px 20px;
+    margin-bottom: 34px;
+    border: 1px solid $dark-border-color;
+    border-radius: 14px;
+    text-align: center;
+}
 
-    .warning {
-        color: $warning;
-    }
+.status-hero-inner {
+    display: inline-flex;
+    align-items: center;
+    gap: 12px;
+}
 
-    .danger {
-        color: $danger;
-    }
+.status-hero-dot {
+    width: 12px;
+    height: 12px;
+    border-radius: 50%;
+    flex-shrink: 0;
+    background: currentcolor;
+    box-shadow: 0 0 0 4px color-mix(in srgb, currentcolor 18%, transparent);
+}
+
+.status-hero-label {
+    font-size: 28px;
+    font-weight: 600;
+    line-height: 1.2;
+    color: inherit;
+}
+
+.status-hero-meta {
+    font-size: 13px;
+    opacity: 0.65;
+}
+
+.status-hero.status-up {
+    color: $primary;
+    background: color-mix(in srgb, $primary 7%, transparent);
+    border-color: color-mix(in srgb, $primary 28%, transparent);
+}
+
+.status-hero.status-degraded {
+    color: $warning;
+    background: color-mix(in srgb, $warning 8%, transparent);
+    border-color: color-mix(in srgb, $warning 30%, transparent);
+}
+
+.status-hero.status-down {
+    color: $danger;
+    background: color-mix(in srgb, $danger 8%, transparent);
+    border-color: color-mix(in srgb, $danger 32%, transparent);
+}
+
+.status-hero.status-maintenance {
+    color: $maintenance;
+    background: color-mix(in srgb, $maintenance 8%, transparent);
+    border-color: color-mix(in srgb, $maintenance 30%, transparent);
+}
+
+.status-hero.status-unknown {
+    color: $secondary-text;
+    background: transparent;
+}
+
+// ---------------------------------------------------------------------------
+// Sections
+// ---------------------------------------------------------------------------
+
+.status-section {
+    margin-bottom: 34px;
+}
+
+.status-section-title {
+    font-size: 15px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: $secondary-text;
+    margin-bottom: 12px;
+}
+
+// ---------------------------------------------------------------------------
+// Incident cards
+// ---------------------------------------------------------------------------
+
+.incident-card {
+    border: 1px solid $dark-border-color;
+    border-left-width: 3px;
+    border-radius: 10px;
+    padding: 16px 18px;
+    margin-bottom: 10px;
+    background: color-mix(in srgb, $dark-bg 60%, transparent);
+}
+
+.incident-card-head {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 12px;
+    margin-bottom: 8px;
+}
+
+.incident-card-title {
+    font-size: 17px;
+    font-weight: 600;
+    margin: 0;
+}
+
+.incident-card-dates {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px 16px;
+    margin-top: 10px;
+    font-size: 12px;
+    color: $secondary-text;
+}
+
+.incident-badge {
+    flex-shrink: 0;
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    padding: 3px 9px;
+    border-radius: 999px;
+    white-space: nowrap;
+}
+
+.incident-badge-warning {
+    color: $warning;
+    background: color-mix(in srgb, $warning 16%, transparent);
+}
+
+.incident-badge-danger {
+    color: $danger;
+    background: color-mix(in srgb, $danger 16%, transparent);
+}
+
+.incident-badge-info,
+.incident-badge-primary,
+.incident-badge-secondary,
+.incident-badge-light,
+.incident-badge-dark,
+.incident-badge-success {
+    color: $maintenance;
+    background: color-mix(in srgb, $maintenance 16%, transparent);
+}
+
+.incident-card-warning {
+    border-left-color: $warning;
+}
+
+.incident-card-danger {
+    border-left-color: $danger;
+}
+
+.incident-card-info,
+.incident-card-primary,
+.incident-card-secondary,
+.incident-card-light,
+.incident-card-dark,
+.incident-card-success {
+    border-left-color: $maintenance;
+}
+
+// ---------------------------------------------------------------------------
+// Past incidents
+// ---------------------------------------------------------------------------
+
+.incident-date-group {
+    margin-bottom: 20px;
+}
+
+.incident-date-header {
+    font-size: 12px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: $secondary-text;
+    margin-bottom: 8px;
+}
+
+.load-more-controls {
+    display: flex;
+    justify-content: center;
+    margin-top: 16px;
 }
 
 h1 {
@@ -1720,8 +1935,13 @@ footer {
         font-size: 22px;
     }
 
-    .overall-status {
-        font-size: 20px;
+    .status-hero {
+        padding: 24px 14px;
+        margin-bottom: 24px;
+    }
+
+    .status-hero-label {
+        font-size: 21px;
     }
 }
 
@@ -1770,29 +1990,5 @@ footer {
 
 .refresh-info {
     opacity: 0.7;
-}
-
-.past-incidents-title {
-    font-size: 26px;
-    font-weight: normal;
-}
-
-.past-incidents-section {
-    .past-incidents-content {
-        padding: 0;
-    }
-}
-
-.incident-date-group {
-    .incident-date-header {
-        font-size: 1rem;
-        font-weight: normal;
-        color: var(--bs-secondary);
-        margin-bottom: 0.75rem;
-    }
-
-    .incident-list-box {
-        padding: 0;
-    }
 }
 </style>
