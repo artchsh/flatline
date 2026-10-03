@@ -91,18 +91,17 @@ router.get("/status-page", async (request, response) => {
 });
 
 // Status page config, incident, monitor list
-router.get("/api/status-page/:slug", cache("5 minutes"), async (request, response) => {
+// Not cached: the cache is keyed on path and ignores cookies, so a cached 401
+// locks out a legitimate visitor and a cached 200 serves a protected page.
+router.get("/api/status-page/:slug", async (request, response) => {
     allowDevAllOrigin(response);
     let slug = request.params.slug;
     slug = slug.toLowerCase();
 
     try {
-        // Get Status Page
-        let statusPage = await R.findOne("status_page", " slug = ? ", [slug]);
-
+        let statusPage = await statusPageAuth.requireUnlocked(request, response, slug);
         if (!statusPage) {
-            sendHttpError(response, "Status Page Not Found");
-            return null;
+            return;
         }
 
         let statusPageData = await StatusPage.getStatusPageData(statusPage);
@@ -116,7 +115,7 @@ router.get("/api/status-page/:slug", cache("5 minutes"), async (request, respons
 
 // Status Page Polling Data
 // Can fetch only if published
-router.get("/api/status-page/heartbeat/:slug", cache("1 minutes"), async (request, response) => {
+router.get("/api/status-page/heartbeat/:slug", async (request, response) => {
     allowDevAllOrigin(response);
 
     try {
@@ -125,7 +124,12 @@ router.get("/api/status-page/heartbeat/:slug", cache("1 minutes"), async (reques
 
         let slug = request.params.slug;
         slug = slug.toLowerCase();
-        let statusPageID = await StatusPage.slugToID(slug);
+
+        let statusPage = await statusPageAuth.requireUnlocked(request, response, slug);
+        if (!statusPage) {
+            return;
+        }
+        let statusPageID = statusPage.id;
 
         let monitorIDList = await R.getCol(
             `
@@ -165,17 +169,15 @@ router.get("/api/status-page/heartbeat/:slug", cache("1 minutes"), async (reques
 });
 
 // Status page's manifest.json
-router.get("/api/status-page/:slug/manifest.json", cache("1440 minutes"), async (request, response) => {
+router.get("/api/status-page/:slug/manifest.json", async (request, response) => {
     allowDevAllOrigin(response);
     let slug = request.params.slug;
     slug = slug.toLowerCase();
 
     try {
         // Get Status Page
-        let statusPage = await R.findOne("status_page", " slug = ? ", [slug]);
-
+        let statusPage = await statusPageAuth.requireUnlocked(request, response, slug);
         if (!statusPage) {
-            sendHttpError(response, "Not Found");
             return;
         }
 
@@ -197,18 +199,18 @@ router.get("/api/status-page/:slug/manifest.json", cache("1440 minutes"), async 
     }
 });
 
-router.get("/api/status-page/:slug/incident-history", cache("5 minutes"), async (request, response) => {
+router.get("/api/status-page/:slug/incident-history", async (request, response) => {
     allowDevAllOrigin(response);
 
     try {
         let slug = request.params.slug;
         slug = slug.toLowerCase();
-        let statusPageID = await StatusPage.slugToID(slug);
 
-        if (!statusPageID) {
-            sendHttpError(response, "Status Page Not Found");
+        let statusPage = await statusPageAuth.requireUnlocked(request, response, slug);
+        if (!statusPage) {
             return;
         }
+        let statusPageID = statusPage.id;
 
         const cursor = request.query.cursor || null;
         const result = await StatusPage.getIncidentHistory(statusPageID, cursor, true);
@@ -222,11 +224,17 @@ router.get("/api/status-page/:slug/incident-history", cache("5 minutes"), async 
 });
 
 // overall status-page status badge
-router.get("/api/status-page/:slug/badge", cache("5 minutes"), async (request, response) => {
+router.get("/api/status-page/:slug/badge", async (request, response) => {
     allowDevAllOrigin(response);
     let slug = request.params.slug;
     slug = slug.toLowerCase();
-    const statusPageID = await StatusPage.slugToID(slug);
+
+    // Badges expose aggregate uptime for the page, so they are gated too.
+    const statusPage = await statusPageAuth.requireUnlocked(request, response, slug);
+    if (!statusPage) {
+        return;
+    }
+    const statusPageID = statusPage.id;
     const {
         label,
         upColor = badgeConstants.defaultUpColor,

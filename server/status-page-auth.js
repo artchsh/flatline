@@ -295,6 +295,41 @@ function renderPasswordPrompt(slug, error) {
 </html>`;
 }
 
+
+/**
+ * Gate a status page data endpoint.
+ *
+ * The HTML route being protected is not enough: the JSON endpoints return the
+ * same monitor names, URLs and incident history, so an unprotected
+ * /api/status-page/:slug makes the password purely decorative.
+ * @param {express.Request} request Express request
+ * @param {express.Response} response Express response
+ * @param {string} slug Status page slug
+ * @returns {Promise<?Bean>} The page when access is allowed, else null after
+ * responding 401
+ */
+async function requireUnlocked(request, response, slug) {
+    const { R } = require("redbean-node");
+    const statusPage = await R.findOne("status_page", " slug = ? ", [ String(slug).toLowerCase() ]);
+
+    if (!statusPage) {
+        response.status(404).send("Status Page Not Found");
+        return null;
+    }
+
+    if (!isUnlocked(request, statusPage)) {
+        response.set("WWW-Authenticate", "Form");
+        response.status(401).json({
+            ok: false,
+            error: "password_required",
+            message: "This status page is password protected.",
+        });
+        return null;
+    }
+
+    return statusPage;
+}
+
 module.exports = {
     AUTH_COOKIE,
     UNLOCK_TTL_SECONDS,
@@ -306,6 +341,7 @@ module.exports = {
     setUnlockCookie,
     clearUnlockCookie,
     isUnlocked,
+    requireUnlocked,
     parseCookies,
     robotsDirectives,
     renderPasswordPrompt,

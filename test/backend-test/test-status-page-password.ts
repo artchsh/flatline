@@ -117,3 +117,108 @@ test("status page password gate", async (t) => {
         assert.ok(!html.includes("<script>alert(1)</script>"), "slug is escaped");
     });
 });
+test("status page data endpoints are gated", async (t) => {
+    t.before(async () => {
+        await testDb.create();
+        await auth();
+    });
+
+    t.after(async () => {
+        await testDb.destroy();
+    });
+
+    const getR = () => require("redbean-node").R;
+
+    const makePage = async (slug: string, password: string | null) => {
+        const sa = require("../../server/status-page-auth");
+        const bean = getR().dispense("status_page");
+        bean.title = slug;
+        bean.slug = slug;
+        bean.icon = "";
+        bean.theme = "auto";
+        bean.published = 1;
+        bean.password = password ? await sa.hashPassword(password) : null;
+        await getR().store(bean);
+        return bean;
+    };
+
+    /**
+     * Minimal express response double.
+     */
+    const fakeResponse = () => ({
+        statusCode: null as number | null,
+        body: null as any,
+        status(code: number) { this.statusCode = code; return this; },
+        json(payload: any) { this.body = payload; return this; },
+        set() { return this; },
+        send(payload: any) { this.body = payload; return this; },
+    });
+
+    await t.test("requireUnlocked rejects a protected page without a cookie", async () => {
+        const sa = require("../../server/status-page-auth");
+        await makePage("gated", "secret");
+
+        const res = fakeResponse();
+        const page = await sa.requireUnlocked({ headers: {} }, res as any, "gated");
+
+        assert.strictEqual(page, null, "access refused");
+        assert.strictEqual(res.statusCode, 401);
+        assert.strictEqual(res.body.error, "password_required");
+    });
+
+    await t.test("requireUnlocked allows a protected page with a valid cookie", async () => {
+        const sa = require("../../server/status-page-auth");
+        const page = await makePage("gated-cookie", "secret");
+
+        const future = Math.floor(Date.now() / 1000) + 3600;
+        const value = sa.signUnlock("gated-cookie", future);
+        const res = fakeResponse();
+
+        const found = await sa.requireUnlocked(
+            { headers: { cookie: `fl_status_auth=${value}` } },
+            res as any,
+            "gated-cookie"
+        );
+
+        assert.ok(found, "access granted");
+        assert.strictEqual(found.id, page.id);
+    });
+
+    await t.test("requireUnlocked allows an open page with no cookie", async () => {
+        const sa = require("../../server/status-page-auth");
+        await makePage("ungated", null);
+
+        const res = fakeResponse();
+        const found = await sa.requireUnlocked({ headers: {} }, res as any, "ungated");
+
+        assert.ok(found, "open pages need no cookie");
+    });
+
+    await t.test("requireUnlocked 404s an unknown slug rather than 401", async () => {
+        const sa = require("../../server/status-page-auth");
+        const res = fakeResponse();
+
+        const found = await sa.requireUnlocked({ headers: {} }, res as any, "does-not-exist");
+
+        assert.strictEqual(found, null);
+        assert.strictEqual(res.statusCode, 404, "does not confirm or deny gated slugs");
+    });
+
+    await t.test("a cookie for one page does not unlock another", async () => {
+        const sa = require("../../server/status-page-auth");
+        await makePage("page-one", "secret");
+        await makePage("page-two", "secret");
+
+        const value = sa.signUnlock("page-one", Math.floor(Date.now() / 1000) + 3600);
+        const res = fakeResponse();
+
+        const found = await sa.requireUnlocked(
+            { headers: { cookie: `fl_status_auth=${value}` } },
+            res as any,
+            "page-two"
+        );
+
+        assert.strictEqual(found, null, "cookie is scoped to its own page");
+        assert.strictEqual(res.statusCode, 401);
+    });
+});
