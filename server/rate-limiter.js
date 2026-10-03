@@ -72,7 +72,18 @@ const apiRateLimiter = new KumaRateLimiter({
     errorMessage: "Too frequently, try again later.",
 });
 
+// Invite redemption is unauthenticated: the token is the only credential, so
+// this caps attempts per IP. Tokens are 32 random bytes so guessing is already
+// infeasible; this is belt and braces against a flood of requests.
+const inviteRateLimiter = new KumaRateLimiter({
+    tokensPerInterval: 20,
+    interval: "minute",
+    fireImmediately: true,
+    errorMessage: "Too frequently, try again later.",
+});
+
 module.exports = {
     loginRateLimiter,
     apiRateLimiter,
+    inviteRateLimiter,
 };

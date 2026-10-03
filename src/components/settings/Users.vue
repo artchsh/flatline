@@ -72,15 +72,74 @@
                 {{ $t("Revoke") }}
             </button>
         </div>
+
+        <hr class="my-4" />
+
+        <h6>{{ $t("Accounts") }}</h6>
+        <p class="text-muted">{{ $t("userAccountsDescription") }}</p>
+
+        <div class="table-responsive">
+            <table class="table align-middle">
+                <thead>
+                    <tr>
+                        <th>{{ $t("Username") }}</th>
+                        <th>{{ $t("Email") }}</th>
+                        <th class="text-end">{{ $t("Actions") }}</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr v-for="user in users" :key="user.id">
+                        <td>
+                            {{ user.username || user.name }}
+                            <span v-if="user.isCurrent" class="badge bg-primary ms-2">{{ $t("You") }}</span>
+                            <span v-if="user.banned" class="badge bg-danger ms-2">{{ $t("Banned") }}</span>
+                        </td>
+                        <td class="text-muted">{{ user.email }}</td>
+                        <td class="text-end">
+                            <button
+                                v-if="!user.isCurrent"
+                                class="btn btn-sm btn-outline-secondary me-1"
+                                type="button"
+                                :disabled="processing"
+                                @click="setBanned(user, !user.banned)"
+                            >
+                                {{ user.banned ? $t("Unban") : $t("Ban") }}
+                            </button>
+                            <button
+                                v-if="!user.isCurrent"
+                                class="btn btn-sm btn-outline-danger"
+                                type="button"
+                                :disabled="processing"
+                                @click="confirmDelete(user)"
+                            >
+                                {{ $t("Delete") }}
+                            </button>
+                        </td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
     </div>
+
+    <Confirm
+        ref="confirmDelete"
+        btn-style="btn-danger"
+        :yes-text="$t('Yes')"
+        :no-text="$t('No')"
+        @yes="doDelete"
+    >
+        {{ $t("userDeleteConfirm") }}
+    </Confirm>
 </template>
 
 <script>
 import CopyableInput from "../CopyableInput.vue";
+import Confirm from "../Confirm.vue";
 
 export default {
     components: {
         CopyableInput,
+        Confirm,
     },
     data() {
         return {
@@ -90,6 +149,7 @@ export default {
             // Shown once after minting; the server never returns it again.
             lastToken: null,
             lastExpires: null,
+            pendingDelete: null,
         };
     },
     computed: {
@@ -97,9 +157,13 @@ export default {
             const list = this.$root.userInviteList ?? {};
             return Object.values(list);
         },
+        users() {
+            return this.$root.userList ?? [];
+        },
     },
     mounted() {
         this.$root.getSocket().emit("getUserInviteList");
+        this.$root.getSocket().emit("getUserList");
     },
     methods: {
         /**
@@ -157,6 +221,47 @@ export default {
             this.processing = true;
             this.$root.getSocket().emit("revokeUserInvite", invite.id, (res) => {
                 this.processing = false;
+                this.$root.toastRes(res);
+            });
+        },
+
+        /**
+         * Ban or unban an account
+         * @param {object} user Account to change
+         * @param {boolean} banned Desired state
+         * @returns {void}
+         */
+        setBanned(user, banned) {
+            this.processing = true;
+            this.$root.getSocket().emit("setUserBanned", user.id, banned, (res) => {
+                this.processing = false;
+                this.$root.toastRes(res);
+            });
+        },
+
+        /**
+         * Ask for confirmation before removing an account
+         * @param {object} user Account to remove
+         * @returns {void}
+         */
+        confirmDelete(user) {
+            this.pendingDelete = user;
+            this.$refs.confirmDelete.show();
+        },
+
+        /**
+         * Remove the account chosen in confirmDelete
+         * @returns {void}
+         */
+        doDelete() {
+            if (!this.pendingDelete) {
+                return;
+            }
+
+            this.processing = true;
+            this.$root.getSocket().emit("deleteUser", this.pendingDelete.id, (res) => {
+                this.processing = false;
+                this.pendingDelete = null;
                 this.$root.toastRes(res);
             });
         },

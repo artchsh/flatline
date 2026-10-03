@@ -41,6 +41,7 @@ export default {
             maintenanceList: {},
             apiKeyList: {},
             userInviteList: {},
+            userList: [],
             heartbeatList: {},
             avgPingList: {},
             uptimeList: {},
@@ -163,6 +164,9 @@ export default {
             });
             socket.on("userInviteList", (data) => {
                 this.userInviteList = data;
+            });
+            socket.on("userList", (data) => {
+                this.userList = data;
             });
 
             socket.on("notificationList", (data) => {

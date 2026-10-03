@@ -1661,5 +1661,12 @@
     "userInviteExpiresAt": "Expires {date}",
     "userInviteUsedAt": "Used {date}",
     "userInviteRedeemed": "Account created. Please log in.",
-    "userInvitePasswordHint": "At least 8 characters."
+    "userInvitePasswordHint": "At least 8 characters.",
+    "Accounts": "Accounts",
+    "userAccountsDescription": "Everyone here shares the same monitors, notifications and settings. Removing an account does not delete any of that.",
+    "userDeleteConfirm": "Remove this account? They lose access immediately. Their API tokens and invite links are deleted with them.",
+    "Ban": "Ban",
+    "Unban": "Unban",
+    "Banned": "Banned",
+    "You": "You"
 }

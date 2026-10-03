@@ -188,6 +188,7 @@ const { dockerSocketHandler } = require("./socket-handlers/docker-socket-handler
 const { maintenanceSocketHandler } = require("./socket-handlers/maintenance-socket-handler");
 const { apiKeySocketHandler } = require("./socket-handlers/api-key-socket-handler");
 const { userInviteSocketHandler, startInvitePruner } = require("./socket-handlers/user-invite-socket-handler");
+const { userSocketHandler } = require("./socket-handlers/user-socket-handler");
 const { generalSocketHandler } = require("./socket-handlers/general-socket-handler");
 const { Settings } = require("./settings");
 const apicache = require("./modules/apicache");
@@ -1114,6 +1115,7 @@ app.use(function (req, res, next) {
         maintenanceSocketHandler(socket);
         apiKeySocketHandler(socket);
         userInviteSocketHandler(socket);
+        userSocketHandler(socket);
         remoteBrowserSocketHandler(socket);
         generalSocketHandler(socket, server);
         chartSocketHandler(socket);

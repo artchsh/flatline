@@ -3,7 +3,7 @@ process.env.UPTIME_KUMA_HIDE_LOG = ["info_db", "info_server"].join(",");
 const { describe, test, mock, before, after } = require("node:test");
 const assert = require("node:assert");
 const DomainExpiry = require("../../server/model/domain_expiry");
-const mockWebhook = require("./notification-providers/mock-webhook");
+const mockTelegram = require("./notification-providers/mock-telegram");
 const TestDB = require("../mock-testdb");
 const { R } = require("redbean-node");
 const { Notification } = require("../../server/notification");
@@ -199,22 +199,25 @@ describe("Domain Expiry", () => {
         };
         const manyDays = 3650;
         await setSetting("domainExpiryNotifyDays", [manyDays], "general");
+        // Telegram is the only provider left in this build, so the mock stands
+        // in for the Bot API via telegramServerUrl.
         const notif = R.convertToBean("notification", {
             config: JSON.stringify({
-                type: "webhook",
-                httpMethod: "post",
-                webhookContentType: "json",
-                webhookURL: `http://127.0.0.1:${hook.port}/${hook.url}`,
+                type: "telegram",
+                telegramBotToken: "test-token",
+                telegramChatID: "12345",
+                telegramServerUrl: `http://127.0.0.1:${hook.port}`,
             }),
             active: 1,
             user_id: 1,
-            name: "Testhook",
+            name: "TestTelegram",
         });
         const [, data] = await Promise.all([
             DomainExpiry.sendNotifications("google.com", [notif]),
-            mockWebhook(hook.port, hook.url),
+            mockTelegram(hook.port),
         ]);
-        assert.match(data.msg, /will expire in/);
+        assert.ok(data.body, "expected a Telegram message to be sent");
+        assert.match(data.body.text, /will expire in/);
     });
 
     test("sendNotifications() handles domain with null expiry without sending NaN", async () => {
@@ -237,24 +240,24 @@ describe("Domain Expiry", () => {
             const notif = {
                 name: "TestNullExpiry",
                 config: JSON.stringify({
-                    type: "webhook",
-                    httpMethod: "post",
-                    webhookContentType: "json",
-                    webhookURL: `http://127.0.0.1:${hook.port}/${hook.url}`,
+                    type: "telegram",
+                    telegramBotToken: "test-token",
+                    telegramChatID: "12345",
+                    telegramServerUrl: `http://127.0.0.1:${hook.port}`,
                 }),
             };
 
-            // Race between sendNotifications and mockWebhook timeout
-            // If webhook is called, we fail. If it times out, we pass.
+            // Race between sendNotifications and the mock timing out
+            // If Telegram is called, we fail. If it times out, we pass.
             const result = await Promise.race([
                 DomainExpiry.sendNotifications("test-null.com", [notif]),
-                mockWebhook(hook.port, hook.url, 500)
+                mockTelegram(hook.port, "sendMessage", 500)
                     .then(() => {
-                        throw new Error("Webhook was called but should not have been for null expiry");
+                        throw new Error("Telegram was called but should not have been for null expiry");
                     })
                     .catch((e) => {
                         if (e.reason === "Timeout") {
-                            return "timeout"; // Expected - webhook was not called
+                            return "timeout"; // Expected - Telegram was not called
                         }
                         throw e;
                     }),
@@ -285,24 +288,24 @@ describe("Domain Expiry", () => {
             const notif = {
                 name: "TestUndefinedExpiry",
                 config: JSON.stringify({
-                    type: "webhook",
-                    httpMethod: "post",
-                    webhookContentType: "json",
-                    webhookURL: `http://127.0.0.1:${hook.port}/${hook.url}`,
+                    type: "telegram",
+                    telegramBotToken: "test-token",
+                    telegramChatID: "12345",
+                    telegramServerUrl: `http://127.0.0.1:${hook.port}`,
                 }),
             };
 
-            // Race between sendNotifications and mockWebhook timeout
-            // If webhook is called, we fail. If it times out, we pass.
+            // Race between sendNotifications and the mock timing out
+            // If Telegram is called, we fail. If it times out, we pass.
             const result = await Promise.race([
                 DomainExpiry.sendNotifications("test-undefined.com", [notif]),
-                mockWebhook(hook.port, hook.url, 500)
+                mockTelegram(hook.port, "sendMessage", 500)
                     .then(() => {
-                        throw new Error("Webhook was called but should not have been for undefined expiry");
+                        throw new Error("Telegram was called but should not have been for undefined expiry");
                     })
                     .catch((e) => {
                         if (e.reason === "Timeout") {
-                            return "timeout"; // Expected - webhook was not called
+                            return "timeout"; // Expected - Telegram was not called
                         }
                         throw e;
                     }),

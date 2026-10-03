@@ -197,10 +197,24 @@ per-user isolation tests were deleted along with the behaviour they asserted.
 
 ### Still to do
 
-- [ ] Decide whether `settings` (entry page, cloudflared token, disable-auth) should also be
-      global. They are stored in a key/value table with no owner, so they already are.
-- [ ] `test-domain.js` has one test that posts to a `webhook` notification, removed with the
-      Telegram-only work. Repoint it at Telegram or delete it.
+Nothing outstanding. Closed in the final pass:
+
+- `test-domain.js` no longer posts to a `webhook` notification. It now points at Telegram via
+  `telegramServerUrl` against a local mock Bot API
+  (`test/backend-test/notification-providers/mock-telegram.js`), so the "sends a notification"
+  test really does assert on an outbound message again. All 18 pass.
+- `redeemUserInvite` is rate limited to 20/min (`inviteRateLimiter`). It is unauthenticated and
+  the token is the only credential, so this caps brute-force and flooding.
+- Account removal: new `server/socket-handlers/user-socket-handler.js` with `getUserList`,
+  `deleteUser` and `setUserBanned`, plus an accounts table in Settings → Users.
+  Deleting an account also clears its sessions, account rows, 2FA rows, verification records,
+  better-auth API keys and any invite links it minted. Shared data (monitors, notifications,
+  maintenance) is untouched.
+  Guarded: cannot remove or ban yourself, and the last remaining account is protected so the
+  instance can never be locked out (signup is invite-only).
+  Both mutations are done in SQL rather than through `auth().api.banUser/removeUser`, because
+  those endpoints re-check a better-auth session that a socket handler does not have.
+- Removed `CONTRIBUTING.md` (no contribution process).
 
 ---
 

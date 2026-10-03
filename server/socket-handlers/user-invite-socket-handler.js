@@ -3,7 +3,7 @@ const { log } = require("../../src/util");
 const { R } = require("redbean-node");
 const UserInvite = require("../model/user_invite");
 const { auth } = require("../better-auth");
-const { hasUser } = require("../routers/better-auth-router");
+const { inviteRateLimiter } = require("../rate-limiter");
 
 /**
  * Send the current user's invite list to the client.
@@ -176,6 +176,12 @@ module.exports.userInviteSocketHandler = (socket) => {
      */
     socket.on("redeemUserInvite", async (token, username, password, callback) => {
         try {
+            // Unauthenticated endpoint, so cap attempts before doing any work.
+            const remaining = await inviteRateLimiter.removeTokens(1);
+            if (remaining < 0) {
+                throw new Error("Too frequently, try again later.");
+            }
+
             if (typeof username !== "string" || username.trim().length === 0) {
                 throw new Error("Username is required.");
             }
@@ -238,25 +244,6 @@ module.exports.userInviteSocketHandler = (socket) => {
             });
         } catch (e) {
             log.error("auth", e);
-            callback({
-                ok: false,
-                msg: e.message,
-            });
-        }
-    });
-
-    /**
-     * Whether this instance still has no users, so the signup page can tell
-     * the difference between "needs an invite" and "needs first-run setup".
-     */
-    socket.on("getUserInviteEnabled", async (callback) => {
-        try {
-            const usersExist = await hasUser();
-            callback({
-                ok: true,
-                enabled: usersExist,
-            });
-        } catch (e) {
             callback({
                 ok: false,
                 msg: e.message,
