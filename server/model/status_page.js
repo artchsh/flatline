@@ -498,6 +498,10 @@ class StatusPage extends BeanModel {
             icon: this.getIcon(),
             autoRefreshInterval: this.autoRefreshInterval,
             theme: this.theme,
+            // Per-client brand colour. Consumers must apply this as a CSS
+            // custom property for chrome only and never derive status colours
+            // from it, so status meaning stays consistent across pages.
+            accentColor: this.accent_color ?? null,
             published: !!this.published,
             showTags: !!this.show_tags,
             customCSS: this.custom_css,

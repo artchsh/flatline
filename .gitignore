@@ -25,3 +25,12 @@ extra/exe-builder/obj
 .vs
 .vscode
 .devcontainer
+
+# Frontend workspaces.
+#
+# The backend keeps its own dependency tree: apps/* and packages/* install
+# separately, so a frontend change can never perturb the server.
+apps/*/node_modules
+apps/*/.next
+apps/*/out
+packages/*/node_modules

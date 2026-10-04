@@ -66,6 +66,40 @@ router.get("/robots.txt", (request, response) => {
 });
 
 // Not cached: see the note on the RSS route below.
+/**
+ * Resolve a hostname to a status page slug.
+ *
+ * Lets the public status site do host-based routing (status.client-a.kz)
+ * without a second copy of the domain map: this is the only place that
+ * mapping exists. Returns the slug only, never page content, so it is safe to
+ * leave ungated.
+ */
+router.get("/api/status-page/resolve-host", async (request, response) => {
+    allowDevAllOrigin(response);
+
+    let host = String(request.query.host ?? "").trim().toLowerCase();
+    if (!host) {
+        // Fall back to the request's own Host header.
+        host = String(request.headers.host ?? "").trim().toLowerCase();
+    }
+
+    // Drop any port so "example.com:3001" matches "example.com".
+    host = host.replace(/:\d+$/, "");
+
+    if (!StatusPage.domainMappingList || Object.keys(StatusPage.domainMappingList).length === 0) {
+        await StatusPage.loadDomainMappingList();
+    }
+
+    const slug = StatusPage.domainMappingList[host] ?? null;
+
+    response.json({
+        ok: true,
+        host,
+        slug,
+        matched: slug !== null,
+    });
+});
+
 router.get("/status/:slug", async (request, response) => {
     let slug = request.params.slug;
     slug = slug.toLowerCase();
