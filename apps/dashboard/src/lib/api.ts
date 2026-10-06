@@ -179,3 +179,65 @@ export function resumeMonitor(id: number): Promise<{ ok: true; monitor: MonitorS
         body: JSON.stringify({ active: true }),
     });
 }
+
+export interface MonitorTypeInfo {
+    name: string;
+    supportsConditions: boolean;
+    allowCustomStatus: boolean;
+}
+
+/**
+ * Fetch supported monitor types and writable fields.
+ * Used to populate the type picker with live server data.
+ */
+export function fetchMonitorTypes(): Promise<{
+    ok: true;
+    count: number;
+    types: Record<string, MonitorTypeInfo>;
+    writableFields: string[];
+}> {
+    return request("/api/v1/monitor-types");
+}
+
+/**
+ * Fetch a single monitor with full detail.
+ */
+export function fetchMonitor(id: number): Promise<{ ok: true; monitor: MonitorSummary & Record<string, unknown> }> {
+    return request(`/api/v1/monitors/${id}`);
+}
+
+/**
+ * Create a monitor.
+ * Unknown fields are ignored server-side and reported back.
+ */
+export function createMonitor(payload: Record<string, unknown>): Promise<{
+    ok: true;
+    monitor: MonitorSummary;
+    ignoredFields: string[];
+}> {
+    return request("/api/v1/monitors", {
+        method: "POST",
+        body: JSON.stringify(payload),
+    });
+}
+
+/**
+ * Partially update a monitor. Only supplied fields change.
+ */
+export function updateMonitor(
+    id: number,
+    payload: Record<string, unknown>
+): Promise<{ ok: true; monitor: MonitorSummary; ignoredFields: string[] }> {
+    return request(`/api/v1/monitors/${id}`, {
+        method: "PATCH",
+        body: JSON.stringify(payload),
+    });
+}
+
+/**
+ * Delete a monitor.
+ */
+export function deleteMonitor(id: number, deleteChildren = false): Promise<{ ok: true; deleted: number[]; count: number }> {
+    const suffix = deleteChildren ? "?deleteChildren=true" : "";
+    return request(`/api/v1/monitors/${id}${suffix}`, { method: "DELETE" });
+}

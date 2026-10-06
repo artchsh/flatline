@@ -2,7 +2,9 @@ import { useEffect, useMemo, useState } from "react";
 import type { SyntheticEvent } from "react";
 import {
     ApiError,
+    deleteMonitor,
     fetchHealth,
+    fetchMonitor,
     fetchMonitors,
     getToken,
     pauseMonitor,
@@ -11,6 +13,7 @@ import {
     type HealthSummary,
     type MonitorSummary,
 } from "@/lib/api";
+import { MonitorForm } from "@/components/MonitorForm";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -176,10 +179,12 @@ function MonitorTable({
     monitors,
     selected,
     onToggle,
+    onEdit,
 }: {
     monitors: MonitorSummary[];
     selected: Set<number>;
     onToggle: (id: number) => void;
+    onEdit: (id: number) => void;
 }) {
     return (
         <div className="overflow-x-auto">
@@ -235,7 +240,13 @@ function MonitorTable({
                                     scanning many rows, so vertical space in a row
                                     is the scarce resource. */}
                                 <div className="flex items-baseline gap-2 truncate">
-                                    <span className="truncate font-medium">{monitor.name}</span>
+                                    <button
+                                        type="button"
+                                        onClick={() => onEdit(monitor.id)}
+                                        className="truncate font-medium hover:text-primary hover:underline"
+                                    >
+                                        {monitor.name}
+                                    </button>
                                     <span className="truncate text-xs text-quiet">
                                         {monitor.url ?? monitor.lastMessage ?? "—"}
                                     </span>
@@ -277,6 +288,11 @@ export default function App() {
     const [query, setQuery] = useState("");
     const [error, setError] = useState<string | null>(null);
     const [busy, setBusy] = useState(false);
+    const [formState, setFormState] = useState<
+        | { mode: "create" }
+        | { mode: "edit"; monitor: MonitorSummary & Record<string, unknown> }
+        | null
+    >(null);
 
     async function load() {
         try {
@@ -341,11 +357,25 @@ export default function App() {
         );
     }, [ monitors, query ]);
 
-    async function applyToSelection(action: "pause" | "resume") {
+    async function applyToSelection(action: "pause" | "resume" | "delete") {
+        if (action === "delete") {
+            const count = selected.size;
+            if (!window.confirm(`Delete ${count} monitor${count === 1 ? "" : "s"}? This cannot be undone.`)) {
+                return;
+            }
+        }
         setBusy(true);
         try {
             await Promise.all(
-                [ ...selected ].map((id) => (action === "pause" ? pauseMonitor(id) : resumeMonitor(id)))
+                [ ...selected ].map((id) => {
+                    if (action === "pause") {
+                        return pauseMonitor(id);
+                    }
+                    if (action === "resume") {
+                        return resumeMonitor(id);
+                    }
+                    return deleteMonitor(id);
+                })
             );
             setSelected(new Set());
             await load();
@@ -353,6 +383,15 @@ export default function App() {
             setError(e instanceof Error ? e.message : "Action failed.");
         } finally {
             setBusy(false);
+        }
+    }
+
+    async function openEdit(id: number) {
+        try {
+            const res = await fetchMonitor(id);
+            setFormState({ mode: "edit", monitor: res.monitor });
+        } catch (e) {
+            setError(e instanceof Error ? e.message : "Could not load monitor.");
         }
     }
 
@@ -381,6 +420,9 @@ export default function App() {
                 ) : null}
 
                 <div className="ml-auto flex items-center gap-2">
+                    <Button size="sm" onClick={() => setFormState({ mode: "create" })}>
+                        New monitor
+                    </Button>
                     {selected.size > 0 ? (
                         <>
                             <span className="text-xs text-quiet">
@@ -401,6 +443,14 @@ export default function App() {
                                 onClick={() => void applyToSelection("resume")}
                             >
                                 Resume
+                            </Button>
+                            <Button
+                                variant="destructive"
+                                size="sm"
+                                disabled={busy}
+                                onClick={() => void applyToSelection("delete")}
+                            >
+                                Delete
                             </Button>
                         </>
                     ) : null}
@@ -445,8 +495,33 @@ export default function App() {
                             return next;
                         })
                     }
+                    onEdit={(id) => void openEdit(id)}
                 />
             )}
+
+            {formState ? (
+                <div
+                    className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/60 p-4"
+                    onClick={() => setFormState(null)}
+                >
+                    <div
+                        className="mt-8 w-full max-w-2xl rounded-lg border border-border bg-card p-5"
+                        onClick={(e) => e.stopPropagation()}
+                    >
+                        <h2 className="mb-4 text-base font-semibold">
+                            {formState.mode === "create" ? "New monitor" : `Edit ${formState.monitor.name}`}
+                        </h2>
+                        <MonitorForm
+                            initial={formState.mode === "edit" ? formState.monitor : null}
+                            onSaved={() => {
+                                setFormState(null);
+                                void load();
+                            }}
+                            onCancel={() => setFormState(null)}
+                        />
+                    </div>
+                </div>
+            ) : null}
         </div>
     );
 }

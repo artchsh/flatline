@@ -7,8 +7,6 @@ const config: NextConfig = {
     // than requiring a separate build step for every consumer.
     transpilePackages: [ "@flatline/shared" ],
 
-    output: "standalone",
-
     // The repository root .eslintrc.js is Vue-oriented and misfires on TSX
     // (jsdoc/require-jsdoc, no-undef on React). This app is typechecked with
     // `npm run typecheck` instead of inheriting that config.
