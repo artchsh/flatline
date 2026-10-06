@@ -205,10 +205,14 @@ export function StatusPageView({ data, heartbeats, history = [] }: {
                 </section>
             ) : null}
 
-            <footer className="footer">
-                {data.config.showPoweredBy ? <span>Status by Flatline</span> : null}
-                <span>Updated {new Date().toISOString().slice(11, 16)} UTC</span>
-            </footer>
+            {/* Only rendered when there is something to say. A bare
+                "updated at" line is noise on a page whose whole point is
+                showing current state. */}
+            {data.config.showPoweredBy ? (
+                <footer className="footer">
+                    <span>Status by Flatline</span>
+                </footer>
+            ) : null}
         </div>
     );
 }

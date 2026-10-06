@@ -17,10 +17,15 @@ const express = require("express");
 const { R } = require("redbean-node");
 const { log } = require("../../src/util");
 const { tokenAuth } = require("../auth");
+const { apiCors } = require("../api-cors");
 const StatusPage = require("../model/status_page");
 const generator = require("../model/status-page-generator");
 
 const router = express.Router();
+
+// Before the body parser and routes, so a preflight is answered here rather
+// than 404ing before the headers are set.
+router.use(apiCors);
 router.use(express.json({ limit: "1mb" }));
 
 /**

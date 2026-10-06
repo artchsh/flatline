@@ -1,0 +1,101 @@
+@import "tailwindcss";
+
+/*
+ * Flatline design tokens, shadcn-compatible.
+ *
+ * shadcn components read semantic variables (--background, --foreground,
+ * --primary, ...) rather than raw colours, so the shadcn component source we
+ * vendor in can stay untouched when the palette changes.
+ *
+ * --primary is the Flatline accent from src/assets/vars.scss on the server.
+ * Status colours are separate and fixed: they carry meaning and must never be
+ * derived from the accent, or a red-branded client would make outages
+ * unreadable.
+ */
+
+@theme {
+    --color-ok: #3fb950;
+    --color-warn: #f0c54b;
+    --color-bad: #e5484d;
+    --color-maint: #4c8dff;
+}
+
+:root {
+    color-scheme: dark;
+
+    /* Surfaces */
+    --background: #111113;
+    --surface: #161618;
+    --surface-2: #0b0b0d;
+    --foreground: #f2efea;
+    --muted: #bab3ad;
+    --quiet: #938c87;
+    --border: #26262a;
+    --input: #26262a;
+    --ring: #ff4d2e;
+
+    /* Accent */
+    --primary: #ff4d2e;
+    --primary-foreground: #ffffff;
+
+    --secondary: #161618;
+    --secondary-foreground: #f2efea;
+
+    --muted-foreground: #938c87;
+    --card: #161618;
+    --card-foreground: #f2efea;
+
+    --destructive: #e5484d;
+    --destructive-foreground: #ffffff;
+
+    --radius: 0.5rem;
+}
+
+@theme inline {
+    --color-background: var(--background);
+    --color-foreground: var(--foreground);
+    --color-card: var(--card);
+    --color-card-foreground: var(--card-foreground);
+    --color-surface: var(--surface);
+    --color-surface-2: var(--surface-2);
+    --color-primary: var(--primary);
+    --color-primary-foreground: var(--primary-foreground);
+    --color-secondary: var(--secondary);
+    --color-secondary-foreground: var(--secondary-foreground);
+    --color-muted: var(--muted);
+    --color-muted-foreground: var(--muted-foreground);
+    --color-quiet: var(--quiet);
+    --color-border: var(--border);
+    --color-input: var(--input);
+    --color-ring: var(--ring);
+    --color-destructive: var(--destructive);
+    --color-destructive-foreground: var(--destructive-foreground);
+
+    --radius-lg: var(--radius);
+    --radius-md: calc(var(--radius) - 2px);
+    --radius-sm: calc(var(--radius) - 4px);
+}
+
+* {
+    border-color: var(--border);
+}
+
+body {
+    margin: 0;
+    background: var(--background);
+    color: var(--foreground);
+    font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    -webkit-font-smoothing: antialiased;
+}
+
+/* Tabular figures everywhere numbers are compared down a column. */
+.tnum {
+    font-variant-numeric: tabular-nums;
+}
+
+/* Dense by design: the operator reads many rows, so rows are short and the
+   focus ring is obvious rather than pretty. */
+:focus-visible {
+    outline: 2px solid var(--ring);
+    outline-offset: 1px;
+}

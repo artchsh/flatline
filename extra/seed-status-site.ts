@@ -130,7 +130,25 @@ async function main() {
         await beat(edge.id, 1, i * 30, 95);
     }
 
-    console.log("seeded: /status/northwind (open) and /status/halberd (password halberd-secret)");
+    // API tokens for exercising the dashboard: a full-access one and a
+    // read-only one, so scope gating can be checked by hand too.
+    const passwordHash = require("../server/password-hash");
+    for (const [ name, secret, scopes ] of [
+        [ "full", "tok-full", "read,write,publish" ],
+        [ "read", "tok-read", "read" ],
+    ]) {
+        const key = R.dispense("api_key");
+        key.key = await passwordHash.generate(secret);
+        key.name = name;
+        key.user_id = uid;
+        key.active = 1;
+        key.expires = null;
+        key.scopes = scopes;
+        await R.store(key);
+    }
+
+    console.log("seeded: /status/northwind (open), /status/halberd (halberd-secret)");
+    console.log("tokens: uk1_tok-full (read+write+publish), uk2_tok-read (read)");
     process.exit(0);
 }
 
