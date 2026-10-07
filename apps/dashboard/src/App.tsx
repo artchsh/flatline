@@ -4,7 +4,6 @@ import {
     ApiError,
     deleteMonitor,
     fetchHealth,
-    fetchMonitor,
     fetchMonitors,
     getToken,
     pauseMonitor,
@@ -14,6 +13,7 @@ import {
     type MonitorSummary,
 } from "@/lib/api";
 import { MonitorForm } from "@/components/MonitorForm";
+import { MonitorDetail } from "@/components/MonitorDetail";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -293,6 +293,7 @@ export default function App() {
         | { mode: "edit"; monitor: MonitorSummary & Record<string, unknown> }
         | null
     >(null);
+    const [detailId, setDetailId] = useState<number | null>(null);
 
     async function load() {
         try {
@@ -386,15 +387,6 @@ export default function App() {
         }
     }
 
-    async function openEdit(id: number) {
-        try {
-            const res = await fetchMonitor(id);
-            setFormState({ mode: "edit", monitor: res.monitor });
-        } catch (e) {
-            setError(e instanceof Error ? e.message : "Could not load monitor.");
-        }
-    }
-
     if (!authed) {
         return <TokenGate onSaved={() => setAuthed(true)} />;
     }
@@ -476,7 +468,16 @@ export default function App() {
                 </div>
             ) : null}
 
-            {filtered.length === 0 ? (
+            {detailId !== null ? (
+                <MonitorDetail
+                    id={detailId}
+                    onBack={() => {
+                        setDetailId(null);
+                        void load();
+                    }}
+                    onEdit={(monitor) => setFormState({ mode: "edit", monitor })}
+                />
+            ) : filtered.length === 0 ? (
                 <p className="px-4 py-10 text-center text-sm text-quiet">
                     {monitors.length === 0 ? "No monitors yet." : "Nothing matches that search."}
                 </p>
@@ -495,7 +496,7 @@ export default function App() {
                             return next;
                         })
                     }
-                    onEdit={(id) => void openEdit(id)}
+                    onEdit={(id) => setDetailId(id)}
                 />
             )}
 

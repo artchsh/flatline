@@ -10,3 +10,5 @@ npm notice run 'vite' --host 0.0.0.0 --port 3003
   ➜  Network: http://192.168.107.0:3003/
   ➜  Network: http://192.168.117.0:3003/
   ➜  Network: http://100.110.57.124:3003/
+7:08:54 AM [vite] (client) hmr update /src/App.tsx, /src/index.css
+7:09:10 AM [vite] (client) hmr update /src/App.tsx, /src/index.css
