@@ -19,8 +19,16 @@ const { Prometheus } = require("../prometheus");
 const Database = require("../database");
 const { UptimeCalculator } = require("../uptime-calculator");
 const { Settings } = require("../settings");
+const { storeMetrics } = require("../monitor-metrics");
 
 let router = express.Router();
+
+// JSON bodies are only used by the push endpoint (agent metrics payloads).
+// The transport cap sits above the metrics size limit on purpose: an
+// oversized metrics object must reach the handler so it can 400 while still
+// recording the heartbeat, rather than dying in the parser and reading as a
+// dead host.
+router.use(express.json({ limit: "256kb" }));
 
 let cache = apicache.middleware;
 const server = UptimeKumaServer.getInstance();
@@ -136,6 +144,18 @@ router.all("/api/push/:pushToken", async (request, response) => {
 
         await R.store(bean);
 
+        // Superboard metrics, if the agent sent any. Stored separately from the
+        // heartbeat and never interpreted here: a broken collector must not
+        // read as a dead host, so the heartbeat above is already recorded and
+        // only the response reflects a metrics problem.
+        let metricsError = null;
+        try {
+            await storeMetrics(monitor.id, bean.time, request.body?.metrics);
+        } catch (e) {
+            metricsError = e.message;
+            log.error("router", `Dropping metrics for monitor ${monitor.id}: ${e.message}`);
+        }
+
         // Shared instance: broadcast to every logged-in user.
         io.to(SHARED_ROOM).emit("heartbeat", bean.toJSON());
 
@@ -145,6 +165,14 @@ router.all("/api/push/:pushToken", async (request, response) => {
             new Prometheus(monitor, await monitor.getTags()).update(bean, undefined);
         } catch (e) {
             log.error("prometheus", "Please submit an issue to our GitHub repo. Prometheus update error: ", e.message);
+        }
+
+        if (metricsError) {
+            response.status(400).json({
+                ok: false,
+                msg: `Heartbeat recorded, metrics dropped: ${metricsError}`,
+            });
+            return;
         }
 
         response.json({
