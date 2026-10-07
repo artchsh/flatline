@@ -241,3 +241,52 @@ export function deleteMonitor(id: number, deleteChildren = false): Promise<{ ok:
     const suffix = deleteChildren ? "?deleteChildren=true" : "";
     return request(`/api/v1/monitors/${id}${suffix}`, { method: "DELETE" });
 }
+
+export interface ApiKeySummary {
+    id: number;
+    name: string;
+    userID: string;
+    createdDate: string;
+    active: boolean;
+    expires: string | null;
+    status: "active" | "inactive" | "expired";
+    scopes: string[];
+}
+
+/**
+ * List this token's sibling tokens (same user). Secrets are never returned.
+ */
+export function fetchApiKeys(): Promise<{ ok: true; count: number; apiKeys: ApiKeySummary[]; availableScopes: string[] }> {
+    return request("/api/v1/api-keys");
+}
+
+/**
+ * Mint a token. The plaintext comes back exactly once.
+ */
+export function createApiKey(payload: { name: string; scopes?: string | string[]; active?: boolean; expires?: string | null }): Promise<{
+    ok: true;
+    apiKey: ApiKeySummary;
+    token: string;
+}> {
+    return request("/api/v1/api-keys", {
+        method: "POST",
+        body: JSON.stringify(payload),
+    });
+}
+
+/**
+ * Enable or disable a token.
+ */
+export function setApiKeyActive(id: number, active: boolean): Promise<{ ok: true; apiKey: ApiKeySummary }> {
+    return request(`/api/v1/api-keys/${id}`, {
+        method: "PATCH",
+        body: JSON.stringify({ active }),
+    });
+}
+
+/**
+ * Revoke a token.
+ */
+export function deleteApiKey(id: number): Promise<{ ok: true; deleted: number }> {
+    return request(`/api/v1/api-keys/${id}`, { method: "DELETE" });
+}

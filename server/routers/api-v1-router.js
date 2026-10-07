@@ -14,7 +14,7 @@
 const express = require("express");
 const { R } = require("redbean-node");
 const { log } = require("../../src/util");
-const { tokenAuth } = require("../auth");
+const { tokenAuth, SCOPES, hasScope } = require("../auth");
 const { apiCors } = require("../api-cors");
 const { UptimeKumaServer } = require("../uptime-kuma-server");
 const { UptimeCalculator } = require("../uptime-calculator");
@@ -1224,6 +1224,187 @@ router.get("/api/v1/health", tokenAuth("read"), async (req, res) => {
         res.json({ ok: true, health: summary });
     } catch (e) {
         log.error("api-v1", `GET /health failed: ${e.message}`);
+        fail(res, 500, "server_error", e.message);
+    }
+});
+
+// ---------------------------------------------------------------------------
+// API tokens
+// ---------------------------------------------------------------------------
+//
+// The dashboard is token-authed over REST and cannot use the socket API key
+// handlers, so token management lives here too. Semantics mirror the socket
+// versions; the one extra rule is that a token can never mint scopes it does
+// not hold itself.
+
+/**
+ * Validate requested scopes the same way the socket handler does, then check
+ * none of them exceed what the caller's own token grants.
+ * @param {express.Response} res Express response, used to report a bad value
+ * @param {string[]} callerScopes Effective scopes of the calling token
+ * @param {any} requested Requested scopes from the body
+ * @returns {string[]|null} Normalised scope list, or null after responding
+ */
+function resolveTokenScopes(res, callerScopes, requested) {
+    let list;
+
+    if (requested === undefined || requested === null || requested === "") {
+        // Least privilege when the caller does not say: read only.
+        list = [ "read" ];
+    } else if (Array.isArray(requested)) {
+        list = requested.map((s) => String(s).trim().toLowerCase()).filter((s) => s.length > 0);
+    } else {
+        list = String(requested).split(",").map((s) => s.trim().toLowerCase()).filter((s) => s.length > 0);
+    }
+
+    const invalid = list.filter((s) => !SCOPES.includes(s));
+    if (invalid.length > 0) {
+        fail(res, 400, "bad_request", `Invalid scope(s): ${invalid.join(", ")}. Use ${SCOPES.map((s) => `"${s}"`).join(", ")}.`);
+        return null;
+    }
+
+    if (list.length === 0) {
+        fail(res, 400, "bad_request", "At least one scope is required.");
+        return null;
+    }
+
+    // No privilege escalation: a read-only token mints read-only tokens.
+    const overreach = list.filter((s) => !hasScope(callerScopes, s));
+    if (overreach.length > 0) {
+        fail(res, 403, "forbidden", `Your token cannot grant "${overreach.join(", ")}".`);
+        return null;
+    }
+
+    return [ ...new Set(list) ];
+}
+
+/**
+ * List the caller's own tokens. Secrets are never returned; the plaintext is
+ * shown exactly once, at creation.
+ */
+router.get("/api/v1/api-keys", tokenAuth("read"), async (req, res) => {
+    try {
+        const keys = await R.find("api_key", " user_id = ? ORDER BY id ", [ req.apiUser ]);
+        res.json({
+            ok: true,
+            count: keys.length,
+            apiKeys: keys.map((bean) => bean.toPublicJSON()),
+            availableScopes: SCOPES,
+        });
+    } catch (e) {
+        log.error("api-v1", `GET /api-keys failed: ${e.message}`);
+        fail(res, 500, "server_error", e.message);
+    }
+});
+
+/**
+ * Mint a token. The plaintext is returned exactly once, in this response.
+ */
+router.post("/api/v1/api-keys", tokenAuth("write"), async (req, res) => {
+    try {
+        const body = req.body ?? {};
+
+        if (!body.name || typeof body.name !== "string" || !body.name.trim()) {
+            fail(res, 400, "bad_request", "`name` is required.");
+            return;
+        }
+
+        const scopes = resolveTokenScopes(res, req.apiScopes, body.scopes);
+        if (!scopes) {
+            return;
+        }
+
+        const { nanoid } = require("nanoid");
+        const passwordHash = require("../password-hash");
+        const APIKey = require("../model/api_key");
+        const { Settings } = require("../settings");
+
+        const clearKey = nanoid(40);
+        const bean = await APIKey.save({
+            key: await passwordHash.generate(clearKey),
+            name: body.name.trim().slice(0, 255),
+            active: body.active ?? true,
+            expires: body.expires ?? null,
+            scopes: scopes.join(","),
+        }, req.apiUser);
+
+        await Settings.set("apiKeysEnabled", true);
+
+        log.info("api-v1", `Minted API key ${bean.id} for user ${req.apiUser} (scopes: ${scopes.join(",")})`);
+
+        res.status(201).json({
+            ok: true,
+            apiKey: bean.toPublicJSON(),
+            // Shown once. There is no endpoint that returns this again.
+            token: `uk${bean.id}_${clearKey}`,
+        });
+    } catch (e) {
+        log.error("api-v1", `POST /api-keys failed: ${e.message}`);
+        fail(res, 500, "server_error", e.message);
+    }
+});
+
+/**
+ * Enable or disable one of the caller's tokens.
+ */
+router.patch("/api/v1/api-keys/:id", tokenAuth("write"), async (req, res) => {
+    try {
+        const id = parseId(req.params.id);
+        if (id === null) {
+            fail(res, 400, "bad_request", "API key id must be a positive integer.");
+            return;
+        }
+
+        if (req.body?.active === undefined) {
+            fail(res, 400, "bad_request", "`active` (true/false) is required.");
+            return;
+        }
+
+        // R.exec returns undefined rather than an affected-row count, so check
+        // existence first instead of trusting its return value.
+        const existing = await R.findOne("api_key", " id = ? AND user_id = ? ", [ id, req.apiUser ]);
+        if (!existing) {
+            fail(res, 404, "not_found", `No API key with id ${id}.`);
+            return;
+        }
+
+        await R.exec("UPDATE api_key SET active = ? WHERE id = ? AND user_id = ? ", [
+            req.body.active ? 1 : 0,
+            id,
+            req.apiUser,
+        ]);
+
+        const bean = await R.findOne("api_key", " id = ? ", [ id ]);
+        res.json({ ok: true, apiKey: bean.toPublicJSON() });
+    } catch (e) {
+        log.error("api-v1", `PATCH /api-keys/:id failed: ${e.message}`);
+        fail(res, 500, "server_error", e.message);
+    }
+});
+
+/**
+ * Revoke (delete) one of the caller's tokens.
+ */
+router.delete("/api/v1/api-keys/:id", tokenAuth("write"), async (req, res) => {
+    try {
+        const id = parseId(req.params.id);
+        if (id === null) {
+            fail(res, 400, "bad_request", "API key id must be a positive integer.");
+            return;
+        }
+
+        const existing = await R.findOne("api_key", " id = ? AND user_id = ? ", [ id, req.apiUser ]);
+        if (!existing) {
+            fail(res, 404, "not_found", `No API key with id ${id}.`);
+            return;
+        }
+
+        await R.exec("DELETE FROM api_key WHERE id = ? AND user_id = ? ", [ id, req.apiUser ]);
+
+        log.info("api-v1", `Revoked API key ${id}`);
+        res.json({ ok: true, deleted: id });
+    } catch (e) {
+        log.error("api-v1", `DELETE /api-keys/:id failed: ${e.message}`);
         fail(res, 500, "server_error", e.message);
     }
 });

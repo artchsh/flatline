@@ -14,6 +14,7 @@ import {
 } from "@/lib/api";
 import { MonitorForm } from "@/components/MonitorForm";
 import { MonitorDetail } from "@/components/MonitorDetail";
+import { AgentPanel } from "@/components/AgentPanel";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -294,6 +295,7 @@ export default function App() {
         | null
     >(null);
     const [detailId, setDetailId] = useState<number | null>(null);
+    const [agentsOpen, setAgentsOpen] = useState(false);
 
     async function load() {
         try {
@@ -412,6 +414,16 @@ export default function App() {
                 ) : null}
 
                 <div className="ml-auto flex items-center gap-2">
+                    <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => {
+                            setDetailId(null);
+                            setAgentsOpen((v) => !v);
+                        }}
+                    >
+                        Agents
+                    </Button>
                     <Button size="sm" onClick={() => setFormState({ mode: "create" })}>
                         New monitor
                     </Button>
@@ -468,7 +480,14 @@ export default function App() {
                 </div>
             ) : null}
 
-            {detailId !== null ? (
+            {agentsOpen ? (
+                <AgentPanel
+                    onClose={() => {
+                        setAgentsOpen(false);
+                        void load();
+                    }}
+                />
+            ) : detailId !== null ? (
                 <MonitorDetail
                     id={detailId}
                     onBack={() => {
@@ -496,7 +515,10 @@ export default function App() {
                             return next;
                         })
                     }
-                    onEdit={(id) => setDetailId(id)}
+                    onEdit={(id) => {
+                        setAgentsOpen(false);
+                        setDetailId(id);
+                    }}
                 />
             )}
 
