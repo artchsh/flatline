@@ -1,24 +1,19 @@
 module.exports = {
-    ignorePatterns: ["test/*.js", "server/modules/*", "src/util.js"],
+    ignorePatterns: ["test/*.js", "server/modules/*"],
     root: true,
     env: {
-        browser: true,
         commonjs: true,
-        es2020: true,
+        es2022: true,
         node: true,
     },
     extends: [
         "eslint:recommended",
-        "plugin:vue/vue3-recommended",
-        "plugin:vue-scoped-css/vue3-recommended",
         "plugin:jsdoc/recommended-error",
         "prettier", // Disables ESLint formatting rules that conflict with Prettier
     ],
-    parser: "vue-eslint-parser",
     parserOptions: {
-        parser: "@typescript-eslint/parser",
         sourceType: "module",
-        requireConfigFile: false,
+        ecmaVersion: 2022,
     },
     plugins: ["jsdoc", "@typescript-eslint"],
     rules: {
@@ -37,13 +32,6 @@ module.exports = {
                 args: "none",
             },
         ],
-        "vue/max-attributes-per-line": "off",
-        "vue/singleline-html-element-content-newline": "off",
-        "vue/html-self-closing": "off",
-        "vue/require-component-is": "off", // not allow is="style" https://github.com/vuejs/eslint-plugin-vue/issues/462#issuecomment-430234675
-        "vue/attribute-hyphenation": "off", // This change noNL to "no-n-l" unexpectedly
-        "vue/multi-word-component-names": "off",
-        "vue-scoped-css/no-unused-selector": "warn",
         curly: "error",
         "no-var": "error",
         "no-throw-literal": "error",

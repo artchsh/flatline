@@ -3,7 +3,8 @@
 Spec for two things: making status pages self-configuring from monitor groups,
 and replacing the Vue frontend with two focused apps.
 
-Status: **not started.** This is the agreed design.
+Status: **shipped.** Phase 1 (backend) and Phase 2 (both apps) are built;
+the old Vue frontend is deleted and the backend serves JSON only.
 
 ---
 

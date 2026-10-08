@@ -25,7 +25,7 @@ Run `npm run lint` and `npm test` locally — nothing enforces it for you anymor
 | Goal | Status |
 |---|---|
 | Rebrand to **Flatline** | **Done** |
-| Frontend rework (optional, maybe Next.js + shadcn) | Deferred / optional |
+| Frontend cutover (Next.js status site + React dashboard, API-only backend) | **Done** |
 | Multi-user, no roles (admin-issued single-use invite links) | **Done** |
 | Telegram-only notifications | **Done** (needs manual test) |
 | Agentic REST API with tokens | **Done** (verified end to end) |
@@ -47,15 +47,37 @@ Cyberpunk palette targets `src/assets/vars.scss` (`$primary: #5cdd8b` today).
 **License:** keep MIT `LICENSE` + Louis Lam's copyright. Add own copyright alongside.
 Never ship upstream's name/logo in the fork (the name is a separate trademark from the code).
 
-### Frontend rework (deferred)
+### Frontend cutover — DONE
 
-Deliberately **not** doing now. If revisited: keep the Express + Socket.IO backend and
-build a separate Next.js frontend against it, rather than a full-stack rewrite.
+The Vue frontend is deleted and the backend is API-only:
 
-Reasoning: shadcn/ui is React-only, so either path means rewriting all 182 components
-(~35k LOC) plus ~2,861 Bootstrap class usages. Socket.IO is the realtime backbone, so a
-full Next.js rewrite also forfeits serverless deploys. A frontend-only split is the
-lower-risk path if this is ever picked up.
+- Backend `:3001` serves JSON only: `/` is an API index, unknown routes are
+  JSON 404s, `robots.txt` is a static `Disallow: /`. No `dist/` build is
+  required to boot. The old `/status/:slug` HTML routes are gone; the JSON
+  data routes (`/api/status-page/*`, heartbeat, incidents, badges, RSS,
+  resolve-host, unlock) stay because the Next.js app reads them.
+- `apps/status-site` (Next.js, `:3002`) owns public status pages;
+  `apps/dashboard` (Vite + React, `:3003`) owns monitors, Superboard and
+  user administration.
+- Auth is one model: `server/routers/auth-router.js` exposes password login
+  (mints a 30-day full-scope token), setup status, invite check/redeem and
+  account admin over REST. The dashboard signs in with username + password
+  (TOTP when enrolled), redeems invites at `/invite/:token`, and manages
+  users in the Users panel. No session cookie, no Socket.IO in the browser
+  flow.
+- Deleted: `src/` except `src/util.ts` (the server imports it in ~70 places),
+  root `index.html` + `vite.config.mjs`, `test/e2e` + playwright config,
+  `public/` icons except `icon.svg` (README logo), 49 Vue/e2e devDeps,
+  `express-static-gzip`, the translation test (no `src/lang` to check
+  against), and the `docker-latest-warning` snippet (injected into legacy
+  HTML images).
+- `dev.sh` points the dashboard at the LAN IP (the bare hostname does not
+  resolve on macOS) and no longer prints a token hint — sign in instead.
+
+Deliberately left for later: the Socket.IO handlers and better-auth session
+routes still run server-side (nothing in the browser uses them); removing
+them is backend simplification, not cutover. Same for production Docker
+packaging of the two frontend apps.
 
 ---
 

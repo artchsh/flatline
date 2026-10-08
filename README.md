@@ -17,12 +17,13 @@ for the full list of changes.
 - **Multiple real users.** Upstream supports several accounts but they cannot be created after
   setup. Flatline adds admin-issued, single-use invite links: mint a link, send it over any channel
   you already trust, the recipient picks their own password. No email required, no signup form.
-- **REST API v1.** Everything the UI does over Socket.IO is available over HTTP with bearer-token
-  auth and per-token `read` / `write` scopes, so scripts and LLM agents can drive it.
+- **REST API v1.** Everything the dashboard does is available over HTTP with bearer-token
+  auth and per-token `read` / `write` / `publish` scopes, so scripts and LLM agents can drive it.
   `GET /api/v1/openapi.json` documents itself.
-- **Per-user ownership enforced.** Upstream trusts whatever id the browser sends; several socket
-  handlers would let any logged-in user read or delete another user's monitors. Every such path is
-  now guarded.
+- **Shared instance.** There are no per-user silos: every operator sees and edits the same
+  monitors, notifications and maintenance windows. Multiple accounts exist so panel access
+  can be shared without passing around one password. Tokens and invite links stay per-user
+  as the audit trail.
 - **Flatline branding.** Hot-orange accent on warm near-black, following the palette of
   [1410666.xyz](https://1410666.xyz).
 
@@ -39,27 +40,50 @@ and more monitor types, status pages, maintenance windows, proxy support, 2FA, a
 - Multi-user with single-use invite links
 - Multiple status pages, maintenance windows, tags, proxy support, 2FA
 - 20-second intervals
-- [80+ languages](./src/lang)
+
+## Architecture
+
+Three processes, one backend:
+
+| App | Dir | Port | What |
+|---|---|---|---|
+| Backend (API only) | `server/` | 3001 | Monitors, checks, notifications, REST v1. Serves JSON, no HTML. |
+| Public status site | `apps/status-site` | 3002 | Per-client status pages (Next.js). |
+| Operator dashboard | `apps/dashboard` | 3003 | Dense monitor table, Superboard, users (Vite + React). |
+
+The dashboard and status site talk to the backend over HTTP with bearer
+tokens. Sign in with a username and password; the dashboard mints a token for
+the browser. Agents use `POST /api/v1/api-keys` (or the dashboard's Agents
+panel) for theirs.
 
 ## 🔧 How to Install
 
-### 🐳 Docker Compose
+### Local dev
+
+Requires Node.js >= 26.2.0.
+
+```bash
+git clone https://github.com/artchsh/flatline.git
+cd flatline
+npm ci
+./dev.sh
+```
+
+`./dev.sh` starts all three servers and seeds a demo database on first run.
+Open the dashboard (address printed by the script) and sign in — on a fresh
+database it asks you to create the first operator account. `./dev.sh stop`
+stops everything; `./dev.sh status` checks health.
+
+### 🐳 Docker
 
 ```bash
 mkdir flatline && cd flatline
 docker compose up -d
 ```
 
-Or use the example file directly:
-
-```bash
-mkdir flatline && cd flatline
-curl -O https://raw.githubusercontent.com/artchsh/flatline/master/compose.yaml
-docker compose up -d
-```
-
-Flatline listens on port **3001** by default. Open <http://localhost:3001> and create the first
-user.
+The image runs the backend API on port **3001**. The dashboard and status
+site run separately (see `apps/dashboard`, `apps/status-site`) pointed at
+the backend's URL.
 
 ### 🐳 Docker Command
 
@@ -80,22 +104,17 @@ Requires Node.js >= 26.2.0.
 git clone https://github.com/artchsh/flatline.git
 cd flatline
 npm ci
-npm run build
-
-# Try it
 npm run start-server-dev
-
-# (Recommended) Run in the background
-npm install -g pm2
-pm2 start npm --name flatline -- run start
-pm2 save
 ```
+
+Then run the frontend apps (each has its own README): `apps/status-site`
+and `apps/dashboard`, pointed at the backend URL.
 
 Data is stored in `./data` (SQLite by default).
 
 ## 🔌 Quick start with the API
 
-Create a token under **Settings → API Keys**, optionally scoped to `read` only. Tokens are shown
+Create a token in the dashboard's **Agents** panel, optionally scoped to `read` only. Tokens are shown
 once.
 
 ```bash

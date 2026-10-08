@@ -10,7 +10,8 @@ class TranslatableError extends Error {
 
     /**
      * Create a TranslatableError.
-     * @param {string} key - Translation key present in src/lang/en.json
+     * @param {string} key - Translation key (no renderer remains since the Vue
+     * frontend was removed; the raw key reaches API clients)
      * @param {object} meta Arbitrary metadata
      */
     constructor(key, meta = {}) {
