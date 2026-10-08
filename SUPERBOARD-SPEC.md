@@ -6,7 +6,8 @@ glance. Built for the wall monitor, not the desk: the operator should be able
 to see from across the room why a server has high load — or just enjoy looking
 at it.
 
-Status: **not started.** This is the agreed design.
+Status: **shipped — Phases 1–4.** See "As built" at the end of each phase for
+the differences between this design and the code.
 
 ---
 
@@ -153,6 +154,19 @@ Token-authed (bearer, same as the dashboard), alongside the existing v1 routers.
 - Response shape is the stored payload plus `time`; the server does not reshape it.
 - CORS: same `api-cors.js` middleware as the rest of v1, so the browser board can read it.
 
+### As built
+
+- `latest` orders by `time DESC, id DESC`, not `id DESC`: insertion order and
+  time order diverge when samples arrive late, and the first version returned a
+  stale row because of it. History orders the same way.
+- Unreadable rows are skipped rather than failing the window: one corrupt
+  payload degrades one sample, not the whole response.
+- History is hard-capped at 1000 rows with a `capped` flag, independent of the
+  `hours` window.
+- `monitorToJSON` now also returns `weight` and `parent`. The board needs them
+  to reproduce the operator's intended order, and they are harmless layout
+  metadata. This is the only change to an existing endpoint in the phase.
+
 ---
 
 ## Phase 4 — Superboard page
@@ -187,6 +201,31 @@ distinct from the dense table: this is the NOC wall, not the operator desk.
 - What "editable" means concretely: which servers appear (any monitor with a
   recent metrics sample), card order (follow group weight, then name), and the
   rotate interval. All three are board settings, not per-card controls.
+
+### As built
+
+- Routes live in the dashboard app: `/superboard` (with chrome) and
+  `/superboard/kiosk` (no chrome, fixed viewport, no scrollbar). A ~40-line
+  path router in `src/lib/router.ts`; no routing dependency.
+- Discovery is the 404: the board lists monitors, skips `type: "group"`, and
+  calls `metrics/latest` for the rest. A 404 means "not a server" and is
+  dropped. Zero configuration, and a server that stops pushing ages out on its
+  own.
+- Card order: parent group `weight`, then the monitor's own `weight`, then
+  name. Name is the tie-breaker so the board never reshuffles between
+  refreshes.
+- Page size is measured, not hard-coded: the board computes columns × rows from
+  its own box against a 340×220 minimum and re-measures on resize, so Full HD
+  and 4K@150% both fill sensibly. `?perPage=N` overrides; `?rotate=SECONDS`
+  sets the rotation interval (default 5, clamped 1–300).
+- Rotation pauses on any pointer, key or touch interaction and resumes after
+  30s idle. It also pauses while the tab is hidden. With everything fitting on
+  one page there is no rotation at all.
+- The first fetch always runs even if the tab is hidden at mount; only the
+  polling interval skips hidden ticks. Without that, a kiosk woken from the
+  background flashes "no servers".
+- A sample older than two intervals dims the card and shows "stale" rather than
+  silently presenting old numbers as current.
 
 ---
 

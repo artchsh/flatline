@@ -1,5 +1,4 @@
 import { useEffect, useMemo, useState } from "react";
-import type { SyntheticEvent } from "react";
 import {
     ApiError,
     deleteMonitor,
@@ -15,6 +14,9 @@ import {
 import { MonitorForm } from "@/components/MonitorForm";
 import { MonitorDetail } from "@/components/MonitorDetail";
 import { AgentPanel } from "@/components/AgentPanel";
+import { TokenGate } from "@/components/TokenGate";
+import { SuperboardApp } from "@/components/Superboard";
+import { navigate, usePath } from "@/lib/router";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -75,59 +77,6 @@ function ageOf(value: string | null): string {
         return `${Math.round(seconds / 3600)}h`;
     }
     return `${Math.round(seconds / 86400)}d`;
-}
-
-/**
- * Token gate. The dashboard is useless without a token, so ask for one up
- * front rather than showing an empty table and a 401.
- */
-function TokenGate({ onSaved }: { onSaved: () => void }) {
-    const [value, setValue] = useState("");
-    const [error, setError] = useState<string | null>(null);
-
-    async function submit(event: SyntheticEvent) {
-        event.preventDefault();
-        setError(null);
-        setToken(value.trim());
-
-        try {
-            await fetchHealth();
-            onSaved();
-        } catch (e) {
-            setToken(null);
-            setError(e instanceof ApiError ? e.message : "Could not reach the Flatline server.");
-        }
-    }
-
-    return (
-        <div className="flex min-h-screen items-center justify-center p-6">
-            <form onSubmit={submit} className="w-full max-w-sm rounded-lg border border-border bg-card p-6">
-                <h1 className="m-0 text-base font-semibold">Flatline</h1>
-                <p className="mt-1 mb-4 text-xs text-muted-foreground">
-                    Paste an API token. Create one under Settings → API Keys, or give the dashboard a
-                    read-only token if it only needs to look.
-                </p>
-
-                {error ? (
-                    <div className="mb-3 rounded-md bg-destructive/12 px-2.5 py-2 text-xs text-destructive">{error}</div>
-                ) : null}
-
-                <Input
-                    type="password"
-                    value={value}
-                    onChange={(e) => setValue(e.target.value)}
-                    placeholder="uk1_…"
-                    autoComplete="off"
-                    autoFocus
-                    required
-                />
-
-                <Button type="submit" className="mt-3 w-full">
-                    Connect
-                </Button>
-            </form>
-        </div>
-    );
 }
 
 /**
@@ -279,9 +228,9 @@ function MonitorTable({
 }
 
 /**
- * Dashboard shell.
+ * The operator's monitor table.
  */
-export default function App() {
+function Dashboard() {
     const [authed, setAuthed] = useState(() => Boolean(getToken()));
     const [health, setHealth] = useState<HealthSummary | null>(null);
     const [monitors, setMonitors] = useState<MonitorSummary[]>([]);
@@ -414,6 +363,9 @@ export default function App() {
                 ) : null}
 
                 <div className="ml-auto flex items-center gap-2">
+                    <Button size="sm" variant="outline" onClick={() => navigate("/superboard")}>
+                        Superboard
+                    </Button>
                     <Button
                         size="sm"
                         variant="outline"
@@ -547,4 +499,22 @@ export default function App() {
             ) : null}
         </div>
     );
+}
+
+/**
+ * Application root.
+ *
+ * Three routes: the monitor table at "/", the wall board at "/superboard", and
+ * the chrome-free board at "/superboard/kiosk". The route is resolved before
+ * either view mounts, so the dashboard's polling never runs while the board is
+ * open.
+ */
+export default function App() {
+    const path = usePath();
+
+    if (path === "/superboard" || path === "/superboard/kiosk") {
+        return <SuperboardApp kiosk={path === "/superboard/kiosk"} />;
+    }
+
+    return <Dashboard />;
 }

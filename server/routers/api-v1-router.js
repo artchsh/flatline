@@ -345,6 +345,12 @@ async function monitorToJSON(monitor, withUptime = true) {
     obj.active = !!monitor.active;
     obj.url = monitor.url;
     obj.interval = monitor.interval;
+    // Ordering hints: `weight` sorts siblings within a group and `parent`
+    // names the group, so a client can reproduce the operator's intended
+    // order (group weight, then monitor weight, then name) without a second
+    // round trip per monitor. Both are non-sensitive layout metadata.
+    obj.weight = monitor.weight ?? 0;
+    obj.parent = monitor.parent ?? null;
 
     if (withUptime) {
         try {

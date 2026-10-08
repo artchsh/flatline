@@ -101,6 +101,8 @@ export interface MonitorSummary {
     lastMessage: string | null;
     active: boolean;
     interval: number;
+    weight?: number;
+    parent?: number | null;
     uptime24h: number | null;
     uptime7d: number | null;
     uptime30d: number | null;
@@ -240,6 +242,51 @@ export function updateMonitor(
 export function deleteMonitor(id: number, deleteChildren = false): Promise<{ ok: true; deleted: number[]; count: number }> {
     const suffix = deleteChildren ? "?deleteChildren=true" : "";
     return request(`/api/v1/monitors/${id}${suffix}`, { method: "DELETE" });
+}
+
+/**
+ * One Superboard metrics sample, as stored by the server.
+ *
+ * The server stores the agent's payload as-is and does not reshape it, so
+ * every field is optional from the reader's point of view: an older agent, or
+ * a capability that failed on the box (no GPU, no Docker), is legitimately
+ * absent. The board must render around missing pieces, not assume them.
+ */
+export interface MetricsPayload {
+    v?: number;
+    host?: { hostname?: string; os?: string; uptime?: number };
+    cpu?: { percent?: number; cores?: number };
+    mem?: { total?: number; used?: number; percent?: number };
+    disk?: { mount?: string; total?: number; used?: number; percent?: number }[];
+    gpu?: {
+        available?: boolean;
+        name?: string;
+        util?: number;
+        memUsed?: number;
+        memTotal?: number;
+        temp?: number;
+    };
+    docker?: { name?: string; image?: string; state?: string; health?: string; ports?: string[] }[];
+}
+
+export interface LatestMetrics {
+    ok: true;
+    monitorId: number;
+    time: string;
+    metrics: MetricsPayload;
+}
+
+/**
+ * Fetch the most recent metrics sample for a monitor.
+ *
+ * Throws an ApiError with status 404 when the monitor has never pushed
+ * metrics — that is the normal way the Superboard discovers which monitors
+ * are servers, so callers are expected to treat 404 as "not a server".
+ * @param id Monitor id
+ * @returns The newest sample and its timestamp
+ */
+export function fetchLatestMetrics(id: number): Promise<LatestMetrics> {
+    return request(`/api/v1/monitors/${id}/metrics/latest`);
 }
 
 export interface ApiKeySummary {
