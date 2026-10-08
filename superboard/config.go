@@ -1,0 +1,83 @@
+package main
+
+import (
+	"encoding/json"
+	"fmt"
+	"os"
+	"path/filepath"
+)
+
+// Config is the agent's entire configuration: where to push and with what
+// credential. Everything else has sane defaults so provisioning is one token
+// plus one URL.
+type Config struct {
+	// ServerURL is the Flatline origin, e.g. https://uptime.mediaboost.kz.
+	ServerURL string `json:"server_url"`
+	// PushToken is the monitor's push token. Bearer secret: the file holding
+	// it must be 0600, and rotation is one server-side regenerate plus one
+	// line changed here.
+	PushToken string `json:"push_token"`
+	// IntervalSeconds between pushes. Matches the monitor's check interval;
+	// silence past interval + buffer reads as host-down server-side.
+	IntervalSeconds int `json:"interval_seconds,omitempty"`
+	// AllowInsecure permits plain HTTP. The agent refuses it by default
+	// because metrics (hostnames, container names, versions) are genuinely
+	// useful recon travelling in cleartext otherwise.
+	AllowInsecure bool `json:"allow_insecure,omitempty"`
+}
+
+// DefaultIntervalSeconds matches the usual monitor check cadence.
+const DefaultIntervalSeconds = 60
+
+// DefaultConfigPath is where `install` writes and `run` reads.
+const DefaultConfigPath = "/etc/superboard/config.json"
+
+/**
+ * Load configuration from disk, applying defaults for unset fields.
+ */
+func loadConfig(path string) (*Config, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("read config %s: %w (run `superboard install` first or pass --config)", path, err)
+	}
+
+	var cfg Config
+	if err := json.Unmarshal(data, &cfg); err != nil {
+		return nil, fmt.Errorf("parse config %s: %w", path, err)
+	}
+
+	if cfg.ServerURL == "" {
+		return nil, fmt.Errorf("config %s: server_url is required", path)
+	}
+	if cfg.PushToken == "" {
+		return nil, fmt.Errorf("config %s: push_token is required", path)
+	}
+	if cfg.IntervalSeconds <= 0 {
+		cfg.IntervalSeconds = DefaultIntervalSeconds
+	}
+
+	return &cfg, nil
+}
+
+/**
+ * Write configuration to disk with owner-only permissions.
+ *
+ * The push token is a bearer secret: anyone who can read this file can
+ * impersonate the host. 0600 is not optional.
+ */
+func saveConfig(path string, cfg *Config) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return fmt.Errorf("create config dir: %w", err)
+	}
+
+	data, err := json.MarshalIndent(cfg, "", "  ")
+	if err != nil {
+		return fmt.Errorf("encode config: %w", err)
+	}
+
+	if err := os.WriteFile(path, append(data, '\n'), 0o600); err != nil {
+		return fmt.Errorf("write config: %w", err)
+	}
+
+	return nil
+}

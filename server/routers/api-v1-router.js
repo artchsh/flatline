@@ -522,11 +522,11 @@ router.post("/api/v1/monitors", tokenAuth("write"), async (req, res) => {
         }
 
         // Reject unknown types up front rather than creating a broken monitor.
-        // "http" and "https" are handled inside monitor.js itself and are not
-        // registered in monitorTypeList, so they are valid but special.
-        const isHttp = body.type === "http" || body.type === "https";
+        // "http", "https" and "push" are handled inside monitor.js itself and
+        // are not registered in monitorTypeList, so they are valid but special.
+        const isSpecialType = body.type === "http" || body.type === "https" || body.type === "push";
 
-        if (!isHttp && !UptimeKumaServer.monitorTypeList[body.type]) {
+        if (!isSpecialType && !UptimeKumaServer.monitorTypeList[body.type]) {
             fail(res, 400, "bad_request", `Unknown monitor type "${body.type}". See GET /api/v1/monitor-types.`);
             return;
         }
@@ -865,11 +865,12 @@ router.post("/api/v1/monitors/:id/heartbeat", tokenAuth("write"), async (req, re
  */
 router.get("/api/v1/monitor-types", tokenAuth("read"), async (req, res) => {
     try {
-        // http/https are handled by monitor.js directly rather than by a
+        // http/https/push are handled by monitor.js directly rather than by a
         // MonitorType subclass, so they are advertised separately.
         const types = {
             http: { name: "HTTP", supportsConditions: true, allowCustomStatus: false },
             https: { name: "HTTPS", supportsConditions: true, allowCustomStatus: false },
+            push: { name: "Push", supportsConditions: false, allowCustomStatus: false },
         };
 
         for (const [ key, def ] of Object.entries(UptimeKumaServer.monitorTypeList)) {
