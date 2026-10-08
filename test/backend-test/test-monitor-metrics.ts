@@ -51,6 +51,7 @@ test("monitor metrics ingest", async (t) => {
         const express = require("express");
         const app = express();
         app.use(require("../../server/routers/api-router"));
+        app.use(require("../../server/routers/api-v1-router"));
 
         await new Promise<void>((resolve) => {
             server = app.listen(0, "127.0.0.1", () => resolve());
@@ -170,5 +171,155 @@ test("monitor metrics ingest", async (t) => {
         const rows = await metricRows();
         assert.ok(rows.length >= 1, "recent rows survive");
         assert.ok(!rows.some((r: any) => r.time.startsWith("2000-")), "old row pruned");
+    });
+});
+
+test("monitor metrics read API", async (t) => {
+    let base = "";
+    let server: any = null;
+    let token = "";
+    let monitorID = 0;
+
+    t.before(async () => {
+        await testDb.create();
+        await auth();
+
+        await auth().api.createUser({
+            body: {
+                name: "admin",
+                email: "admin@noreply.uptime-kuma.internal",
+                password: "Kuma-Test-8f4Q2xR9p",
+                role: "admin",
+                data: { username: "admin" },
+            },
+        });
+
+        const { UptimeKumaServer } = require("../../server/uptime-kuma-server");
+        UptimeKumaServer.getInstance().io = fakeIo();
+
+        const express = require("express");
+        const app = express();
+        app.use(require("../../server/routers/api-v1-router"));
+
+        await new Promise<void>((resolve) => {
+            server = app.listen(0, "127.0.0.1", () => resolve());
+        });
+
+        const address = server.address();
+        base = `http://127.0.0.1:${address.port}`;
+
+        const { R } = require("redbean-node");
+        const passwordHash = require("../../server/password-hash");
+        const owner = await R.findOne("better_auth_user", " email = ? ", [ "admin@noreply.uptime-kuma.internal" ]);
+
+        const key = R.dispense("api_key");
+        key.key = await passwordHash.generate("read-secret");
+        key.name = "reader";
+        key.user_id = owner.id;
+        key.active = true;
+        key.expires = null;
+        key.scopes = "read";
+        await R.store(key);
+        token = `uk${key.id}_read-secret`;
+
+        const monitor = R.dispense("monitor");
+        monitor.user_id = owner.id;
+        monitor.name = "Metric Host";
+        monitor.type = "push";
+        monitor.interval = 60;
+        monitor.retryInterval = 60;
+        monitor.timeout = 48;
+        monitor.active = 1;
+        await R.store(monitor);
+        monitorID = monitor.id;
+
+        // Three samples: two recent, one older than a day.
+        const { storeMetrics } = require("../../server/monitor-metrics");
+        const now = Date.now();
+        const at = (minsAgo: number) =>
+            new Date(now - minsAgo * 60000).toISOString().slice(0, 19).replace("T", " ");
+        await storeMetrics(monitorID, at(10), { v: 1, cpu: { percent: 20, cores: 4 } });
+        await storeMetrics(monitorID, at(70), { v: 1, cpu: { percent: 40, cores: 4 } });
+        await storeMetrics(monitorID, at(1500), { v: 1, cpu: { percent: 90, cores: 4 } });
+    });
+
+    t.after(async () => {
+        await new Promise<void>((resolve) => server.close(() => resolve()));
+        await testDb.destroy();
+    });
+
+    const get = async (path: string, authToken: string | null = token) => {
+        const res = await fetch(`${base}${path}`, {
+            headers: {
+                Accept: "application/json",
+                ...(authToken ? { Authorization: `Bearer ${authToken}` } : {}),
+            },
+        });
+        return { status: res.status, body: await res.json() };
+    };
+
+    await t.test("latest returns the newest sample", async () => {
+        const { status, body } = await get(`/api/v1/monitors/${monitorID}/metrics/latest`);
+        assert.strictEqual(status, 200);
+        assert.strictEqual(body.monitorId, monitorID);
+        assert.strictEqual(body.metrics.cpu.percent, 20);
+    });
+
+    await t.test("latest 404s when there are no samples", async () => {
+        const { R } = require("redbean-node");
+        const owner = await R.findOne("better_auth_user", " email = ? ", [ "admin@noreply.uptime-kuma.internal" ]);
+        const empty = R.dispense("monitor");
+        empty.user_id = owner.id;
+        empty.name = "No Samples";
+        empty.type = "push";
+        empty.interval = 60;
+        empty.retryInterval = 60;
+        empty.timeout = 48;
+        empty.active = 1;
+        await R.store(empty);
+
+        const { status, body } = await get(`/api/v1/monitors/${empty.id}/metrics/latest`);
+        assert.strictEqual(status, 404);
+        assert.strictEqual(body.ok, false);
+    });
+
+    await t.test("history defaults to 24h and excludes older samples", async () => {
+        const { status, body } = await get(`/api/v1/monitors/${monitorID}/metrics`);
+        assert.strictEqual(status, 200);
+        assert.strictEqual(body.hours, 24);
+        assert.strictEqual(body.count, 2, "the 25-hour-old sample is outside the window");
+        assert.strictEqual(body.capped, false);
+        // Newest first.
+        assert.strictEqual(body.metrics[0].metrics.cpu.percent, 20);
+        assert.strictEqual(body.metrics[1].metrics.cpu.percent, 40);
+    });
+
+    await t.test("history honours a wider window", async () => {
+        const { status, body } = await get(`/api/v1/monitors/${monitorID}/metrics?hours=48`);
+        assert.strictEqual(status, 200);
+        assert.strictEqual(body.count, 3);
+    });
+
+    await t.test("history rejects a bad window", async () => {
+        assert.strictEqual((await get(`/api/v1/monitors/${monitorID}/metrics?hours=nope`)).status, 400);
+        assert.strictEqual((await get(`/api/v1/monitors/${monitorID}/metrics?hours=-5`)).status, 400);
+        assert.strictEqual((await get(`/api/v1/monitors/${monitorID}/metrics?hours=0`)).status, 400);
+    });
+
+    await t.test("history caps hours at a week", async () => {
+        // 10000 asks for more than exists; the cap is what matters, not the data.
+        const { status, body } = await get(`/api/v1/monitors/${monitorID}/metrics?hours=10000`);
+        assert.strictEqual(status, 200);
+        assert.strictEqual(body.count, 3, "all rows fit, cap only bounds the window");
+    });
+
+    await t.test("both endpoints require auth", async () => {
+        assert.strictEqual((await get(`/api/v1/monitors/${monitorID}/metrics/latest`, null)).status, 401);
+        assert.strictEqual((await get(`/api/v1/monitors/${monitorID}/metrics`, null)).status, 401);
+    });
+
+    await t.test("both endpoints 404 an unknown monitor", async () => {
+        assert.strictEqual((await get("/api/v1/monitors/999999/metrics/latest")).status, 404);
+        assert.strictEqual((await get("/api/v1/monitors/999999/metrics")).status, 404);
     });
 });

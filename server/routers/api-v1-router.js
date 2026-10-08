@@ -389,6 +389,8 @@ router.get("/api/v1", (req, res) => {
             monitors: "/api/v1/monitors",
             heartbeat: "/api/v1/monitors/{id}/heartbeat",
             heartbeats: "/api/v1/monitors/{id}/heartbeats",
+            metrics: "/api/v1/monitors/{id}/metrics",
+            latestMetrics: "/api/v1/monitors/{id}/metrics/latest",
             incidents: "/api/v1/incidents",
             statusPages: "/api/v1/status-pages",
             maintenance: "/api/v1/maintenance",
@@ -753,6 +755,118 @@ router.get("/api/v1/monitors/:id/heartbeats", tokenAuth("read"), async (req, res
         });
     } catch (e) {
         log.error("api-v1", `GET /heartbeats failed: ${e.message}`);
+        fail(res, 500, "server_error", e.message);
+    }
+});
+
+/**
+ * Most recent metrics sample for a monitor.
+ * @param {express.Request} req Express request
+ * @param {express.Response} res Express response
+ * @returns {Promise<void>}
+ */
+router.get("/api/v1/monitors/:id/metrics/latest", tokenAuth("read"), async (req, res) => {
+    try {
+        const monitor = await loadMonitor(req, res, req.params.id);
+        if (!monitor) {
+            return;
+        }
+
+        // Newest by time, not by id: insertion order and time order can
+        // differ when samples arrive late or out of order.
+        const row = await R.getRow(
+            "SELECT * FROM monitor_metric WHERE monitor_id = ? ORDER BY time DESC, id DESC LIMIT 1",
+            [ monitor.id ]
+        );
+
+        if (!row) {
+            fail(res, 404, "not_found", `No metrics recorded for monitor ${monitor.id} yet.`);
+            return;
+        }
+
+        let metrics;
+        try {
+            metrics = JSON.parse(row.payload);
+        } catch {
+            // Validated at ingest, so this means the row was written around
+            // us or the database is corrupt. Skip it rather than 500.
+            fail(res, 404, "not_found", `No readable metrics for monitor ${monitor.id}.`);
+            return;
+        }
+
+        res.json({
+            ok: true,
+            monitorId: monitor.id,
+            time: row.time,
+            metrics,
+        });
+    } catch (e) {
+        log.error("api-v1", `GET /metrics/latest failed: ${e.message}`);
+        fail(res, 500, "server_error", e.message);
+    }
+});
+
+/**
+ * Windowed metrics history for a monitor, newest first.
+ * @param {express.Request} req Express request
+ * @param {express.Response} res Express response
+ * @returns {Promise<void>}
+ */
+router.get("/api/v1/monitors/:id/metrics", tokenAuth("read"), async (req, res) => {
+    try {
+        const monitor = await loadMonitor(req, res, req.params.id);
+        if (!monitor) {
+            return;
+        }
+
+        // Hours of history. Capped at a week: older than retention there is
+        // nothing to return anyway, and unbounded windows are how a dashboard
+        // accidentally asks for the whole table.
+        let hours = 24;
+        if (req.query.hours !== undefined) {
+            const parsed = Number(req.query.hours);
+            if (!Number.isFinite(parsed) || parsed <= 0) {
+                fail(res, 400, "bad_request", "`hours` must be a positive number.");
+                return;
+            }
+            hours = Math.min(parsed, 168);
+        }
+
+        // Hard row cap, same reasoning as the heartbeats `limit`.
+        const limit = 1000;
+        const cutoff = new Date(Date.now() - hours * 3600 * 1000)
+            .toISOString()
+            .slice(0, 19)
+            .replace("T", " ");
+
+        // Newest by time, not by id — see the /latest endpoint for why.
+        const rows = await R.getAll(
+            `SELECT * FROM monitor_metric WHERE monitor_id = ? AND time >= ? ORDER BY time DESC, id DESC LIMIT ${limit + 1}`,
+            [ monitor.id, cutoff ]
+        );
+
+        const capped = rows.length > limit;
+        const page = capped ? rows.slice(0, limit) : rows;
+
+        const metrics = [];
+        for (const row of page) {
+            try {
+                metrics.push({ time: row.time, metrics: JSON.parse(row.payload) });
+            } catch {
+                // Skip an unreadable row rather than failing the whole window.
+            }
+        }
+
+        res.json({
+            ok: true,
+            monitorId: monitor.id,
+            count: metrics.length,
+            capped,
+            hours,
+            metrics,
+        });
+    } catch (e) {
+        log.error("api-v1", `GET /metrics failed: ${e.message}`);
         fail(res, 500, "server_error", e.message);
     }
 });
