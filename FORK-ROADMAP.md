@@ -74,10 +74,10 @@ The Vue frontend is deleted and the backend is API-only:
 - `dev.sh` points the dashboard at the LAN IP (the bare hostname does not
   resolve on macOS) and no longer prints a token hint — sign in instead.
 
-Deliberately left for later: the Socket.IO handlers and better-auth session
-routes still run server-side (nothing in the browser uses them); removing
-them is backend simplification, not cutover. Same for production Docker
-packaging of the two frontend apps.
+Follow-ups, both done: Socket.IO handlers + better-auth session routes were
+removed server-side (commit "Remove Socket.IO and session routes"), and all
+three apps have production Docker packaging (`compose.yaml`: backend,
+dashboard behind nginx, status site on `next start`).
 
 ---
 

@@ -1,16 +1,47 @@
-ARG BASE_IMAGE=artchsh/flatline:base
+ARG BASE_IMAGE=flatline-base
 
 ############################################
-# Build in Golang
+# Base image, built inline.
+#
+# Upstream publishes this separately, but the fork never did, so a build
+# FROM artchsh/flatline:base fails on a fresh machine. Define it here from
+# node:26-trixie-slim instead; override BASE_IMAGE at build time to use an
+# external one. No apprise: notifications are Telegram-only now. No MariaDB:
+# SQLite is the default and embedded MariaDB remains available through the
+# full base in debian-base.dockerfile.
+############################################
+FROM node:26-trixie-slim AS flatline-base
 
-# Check file: builder-go.dockerfile
-############################################
-FROM artchsh/flatline:builder AS build_healthcheck
+RUN apt update && \
+    apt --yes --no-install-recommends install \
+        sqlite3 \
+        ca-certificates \
+        iputils-ping \
+        util-linux \
+        dumb-init \
+        curl \
+        sudo \
+        nscd \
+        chromium \
+        fonts-noto \
+        fonts-noto-cjk \
+        fonts-indic && \
+    rm -rf /var/lib/apt/lists/* && \
+    apt --yes autoremove
 
-############################################
-# Build in Node.js
-############################################
-FROM artchsh/flatline:base AS build
+# For nscd
+COPY ./docker/etc/nscd.conf /etc/nscd.conf
+COPY ./docker/etc/sudoers /etc/sudoers
+
+# Install cloudflared (optional tunnel, started only with a token)
+RUN curl https://pkg.cloudflare.com/cloudflare-main.gpg --output /usr/share/keyrings/cloudflare-main.gpg && \
+    echo 'deb [signed-by=/usr/share/keyrings/cloudflare-main.gpg] https://pkg.cloudflare.com/cloudflared any main' | tee /etc/apt/sources.list.d/cloudflared.list > /dev/null && \
+    apt update && \
+    apt install --yes --no-install-recommends cloudflared && \
+    rm -rf /var/lib/apt/lists/* && \
+    apt --yes autoremove
+
+FROM $BASE_IMAGE AS build
 USER node
 WORKDIR /app
 
@@ -20,7 +51,6 @@ COPY --chown=node:node package.json package.json
 COPY --chown=node:node package-lock.json package-lock.json
 RUN npm ci --omit=dev
 COPY . .
-COPY --chown=node:node --from=build_healthcheck /app/extra/healthcheck /app/extra/healthcheck
 RUN mkdir ./data
 
 ############################################
@@ -37,9 +67,14 @@ ENV UPTIME_KUMA_IS_CONTAINER=1
 COPY --chown=node:node --from=build /app /app
 
 EXPOSE 3001
-HEALTHCHECK --interval=60s --timeout=30s --start-period=180s --retries=5 CMD extra/healthcheck
+# The Go healthcheck binary needs a separately published builder image, so
+# the check is plain curl against the API index instead. Any response —
+# including the JSON index — means the server is up.
+HEALTHCHECK --interval=60s --timeout=30s --start-period=180s --retries=5 CMD curl -f http://127.0.0.1:3001/ || exit 1
 ENTRYPOINT ["/usr/bin/dumb-init", "--"]
-CMD ["node", "server/server.js"]
+# --import=tsx like `npm start`: the server imports src/util.ts with an
+# extensionless path, which plain node cannot resolve.
+CMD ["node", "--import=tsx", "server/server.js"]
 
 ############################################
 # Rootless Image
@@ -88,31 +123,4 @@ RUN npm ci
 EXPOSE 3000 3001
 HEALTHCHECK --interval=60s --timeout=30s --start-period=180s --retries=5 CMD extra/healthcheck
 CMD ["npm", "run", "start-pr-test"]
-
-############################################
-# Upload the artifact to Github
-############################################
-FROM artchsh/flatline:base AS upload-artifact
-WORKDIR /
-RUN apt update && \
-    apt --yes install curl file
-
-COPY --from=build /app /app
-
-ARG VERSION
-ARG GITHUB_TOKEN
-ARG TARGETARCH
-ARG PLATFORM=debian
-ARG FILE=$PLATFORM-$TARGETARCH-$VERSION.tar.gz
-ARG DIST=dist.tar.gz
-
-RUN chmod +x /app/extra/upload-github-release-asset.sh
-
-# Full Build
-# RUN tar -zcvf $FILE app
-# RUN /app/extra/upload-github-release-asset.sh github_api_token=$GITHUB_TOKEN owner=artchsh repo=flatline tag=$VERSION filename=$FILE
-
-# Dist only
-RUN cd /app && tar -zcvf $DIST dist
-RUN /app/extra/upload-github-release-asset.sh github_api_token=$GITHUB_TOKEN owner=artchsh repo=flatline tag=$VERSION filename=/app/$DIST
 

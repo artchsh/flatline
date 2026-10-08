@@ -78,14 +78,29 @@ stops everything; `./dev.sh status` checks health.
 
 ```bash
 mkdir flatline && cd flatline
-docker compose up -d
+curl -O https://raw.githubusercontent.com/artchsh/flatline/master/compose.yaml
+docker compose up -d --build
 ```
 
-The image runs the backend API on port **3001**. The dashboard and status
-site run separately (see `apps/dashboard`, `apps/status-site`) pointed at
-the backend's URL.
+This starts all three services: the API on **3001**, the dashboard on **3003**,
+the status site on **3002**. Data lives in `./data`. On first run, open the
+dashboard and create the operator account — no token pasting, no seed scripts.
+
+Browsers reach the backend at `BACKEND_URL` (default `http://127.0.0.1:3001`;
+`localhost` fails in some browsers over IPv6). Set it to the LAN host or
+public origin when the browser is elsewhere:
+
+```bash
+BACKEND_URL=http://192.168.1.10:3001 docker compose up -d --build
+```
+
+Behind a reverse proxy, serve all three from one origin instead: the status
+page unlock posts cross-origin otherwise, and the browser will not keep the
+unlock cookie.
 
 ### 🐳 Docker Command
+
+Backend only (the frontends have their own images — see `docker/`):
 
 ```bash
 docker run -d \

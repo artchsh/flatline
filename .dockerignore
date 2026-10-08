@@ -52,3 +52,9 @@ dist-ssr
 #.vscode
 
 ### End of .gitignore content
+apps/*/node_modules
+apps/*/dist
+apps/*/.next
+.dev-data
+.dev-logs
+dist
