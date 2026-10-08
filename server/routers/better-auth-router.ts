@@ -1,5 +1,4 @@
 import express from "express";
-import { toNodeHandler } from "better-auth/node";
 import { auth } from "../better-auth";
 import { R } from "redbean-node";
 import { log } from "../../src/util";
@@ -21,11 +20,11 @@ const expiredMsg = "Setup has expired. Please restart the server to try again.";
  */
 export async function createBetterAuthRouter() {
     const betterAuthRouter = express.Router();
-    betterAuthRouter.all("/api/auth/*", async (req, res) => {
-        allowDevOrigin(req, res);
-        return toNodeHandler(auth())(req, res);
-    });
 
+    // Session routes (/api/auth/*) were removed with Socket.IO: signing in
+    // happens through POST /api/v1/auth/login, which mints a bearer token
+    // instead of a session cookie. The better-auth library itself stays for
+    // password verification and account creation.
     // First Setup
     betterAuthRouter.post("/api/setup", async (req, res) => {
         allowDevOrigin(req, res);
@@ -101,6 +100,8 @@ export async function needSetup() {
             },
             1000 * 60 * 10
         );
+        // Housekeeping must not hold the process (or a test runner) open.
+        setupTimeout.unref?.();
     }
 
     if (expired) {

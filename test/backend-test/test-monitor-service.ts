@@ -1,5 +1,5 @@
 /**
- * Tests for the shared monitor service that both Socket.IO and REST v1 use.
+ * Tests for the shared monitor service that REST v1 uses.
  */
 process.env.UPTIME_KUMA_HIDE_LOG = [ "info_db", "info_server" ].join(",");
 

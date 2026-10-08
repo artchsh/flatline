@@ -20,11 +20,9 @@ const { UptimeKumaServer } = require("../uptime-kuma-server");
 const { UptimeCalculator } = require("../uptime-calculator");
 const Monitor = require("../model/monitor");
 const monitorService = require("../monitor-service");
-const { SHARED_ROOM } = require("../shared-room");
 const openApiDocument = require("./openapi.json");
 const { UP, DOWN, PENDING, MAINTENANCE, flipStatus } = require("../../src/util");
 
-const server = UptimeKumaServer.getInstance();
 
 const router = express.Router();
 
@@ -583,7 +581,6 @@ router.post("/api/v1/monitors", tokenAuth("write"), async (req, res) => {
         });
 
         // Push the change to any connected UI so it appears without a refresh.
-        server.io.to(req.apiUser).emit("monitorList", await server.getMonitorJSONList(req.apiUser));
 
         res.status(201).json({
             ok: true,
@@ -670,7 +667,6 @@ router.patch("/api/v1/monitors/:id", tokenAuth("write"), async (req, res) => {
             notificationIDList: body.notificationIDList ?? null,
         });
 
-        server.io.to(req.apiUser).emit("monitorList", await server.getMonitorJSONList(req.apiUser));
 
         res.json({
             ok: true,
@@ -706,10 +702,6 @@ router.delete("/api/v1/monitors/:id", tokenAuth("write"), async (req, res) => {
         const deleteChildren = req.query.deleteChildren === "true";
 
         const deleted = await monitorService.deleteMonitor(monitor.id, deleteChildren);
-
-        for (const id of deleted) {
-            server.io.to(req.apiUser).emit("deleteMonitorFromList", id);
-        }
 
         res.json({ ok: true, deleted, count: deleted.length });
     } catch (e) {
@@ -960,8 +952,6 @@ router.post("/api/v1/monitors/:id/heartbeat", tokenAuth("write"), async (req, re
         await R.store(bean);
 
         // Push to any connected UI, and fire notifications on state change.
-        server.io.to(SHARED_ROOM).emit("heartbeat", bean.toJSON());
-        Monitor.sendStats(server.io, monitor.id);
 
         if (Monitor.isImportantForNotification(isFirstBeat, previousHeartbeat?.status, bean.status)) {
             await Monitor.sendNotification(isFirstBeat, monitor, bean);
@@ -1147,7 +1137,6 @@ router.post("/api/v1/incidents", tokenAuth("write"), async (req, res) => {
         await R.store(bean);
 
         // Let any connected client refresh its status page (incidents included).
-        server.io.to(req.apiUser).emit("statusPage", await statusPage.toJSON());
 
         res.status(201).json({
             ok: true,

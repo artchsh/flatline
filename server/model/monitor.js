@@ -2,7 +2,6 @@ const dayjs = require("dayjs");
 const axios = require("axios");
 const { setTimeout, clearTimeout } = require("unlimited-timeout");
 const { Prometheus } = require("../prometheus");
-const { SHARED_ROOM } = require("../shared-room");
 const {
     log,
     UP,
@@ -32,7 +31,6 @@ const {
     ping,
     checkCertificate,
     checkStatusCode,
-    getTotalClientInRoom,
     httpNtlm,
     radius,
     kafkaProducerAsync,
@@ -414,10 +412,9 @@ class Monitor extends BeanModel {
 
     /**
      * Start monitor
-     * @param {Server} io Socket server instance
      * @returns {Promise<void>}
      */
-    async start(io) {
+    async start() {
         let previousBeat = null;
         let retries = 0;
 
@@ -988,7 +985,6 @@ class Monitor extends BeanModel {
                 log.debug("monitor", `[${this.name}] apicache clear`);
                 apicache.clear();
 
-                await UptimeKumaServer.getInstance().sendMaintenanceListByUserID(this.user_id);
             } else {
                 bean.important = false;
 
@@ -1059,11 +1055,6 @@ class Monitor extends BeanModel {
             let uptimeCalculator = await UptimeCalculator.getUptimeCalculator(this.id);
             let endTimeDayjs = await uptimeCalculator.update(bean.status, parseFloat(bean.ping));
             bean.end_time = R.isoDateTimeMillis(endTimeDayjs);
-
-            // Send to frontend
-            log.debug("monitor", `[${this.name}] Send to socket`);
-            io.to(SHARED_ROOM).emit("heartbeat", bean.toJSON());
-            Monitor.sendStats(io, this.id);
 
             // Store to database
             log.debug("monitor", `[${this.name}] Store`);
@@ -1311,76 +1302,9 @@ class Monitor extends BeanModel {
         return active === 1 && parentActive;
     }
 
-    /**
-     * Send statistics to clients
-     * @param {Server} io Socket server instance
-     * @param {number} monitorID ID of monitor to send
-     * @returns {Promise<void>}
-     */
-    static async sendStats(io, monitorID) {
-        // Shared instance: stats go to the shared room, which every
-        // logged-in socket joins. Previously this was the monitor creator's
-        // per-user room, so other users' dashboards went stale.
-        const hasClients = getTotalClientInRoom(io, SHARED_ROOM) > 0;
-        let uptimeCalculator = await UptimeCalculator.getUptimeCalculator(monitorID);
-
-        if (hasClients) {
-            // Send 24 hour average ping
-            let data24h = await uptimeCalculator.get24Hour();
-            io.to(SHARED_ROOM).emit("avgPing", monitorID, data24h.avgPing ? Number(data24h.avgPing.toFixed(2)) : null);
-
-            // Send 24 hour uptime
-            io.to(SHARED_ROOM).emit("uptime", monitorID, 24, data24h.uptime);
-
-            // Send 30 day uptime
-            let data30d = await uptimeCalculator.get30Day();
-            io.to(SHARED_ROOM).emit("uptime", monitorID, 720, data30d.uptime);
-
-            // Send 1-year uptime
-            let data1y = await uptimeCalculator.get1Year();
-            io.to(SHARED_ROOM).emit("uptime", monitorID, "1y", data1y.uptime);
-
-            // Send Cert Info
-            await Monitor.sendCertInfo(io, monitorID);
-
-            // Send domain info
-            await Monitor.sendDomainInfo(io, monitorID);
-        } else {
-            log.debug("monitor", "No clients in the room, no need to send stats");
-        }
-    }
-
-    /**
-     * Send certificate information to client
-     * @param {Server} io Socket server instance
-     * @param {number} monitorID ID of monitor to send
-     * @returns {void}
-     */
-    static async sendCertInfo(io, monitorID) {
-        let tlsInfo = await R.findOne("monitor_tls_info", "monitor_id = ?", [monitorID]);
-        if (tlsInfo != null) {
-            io.to(SHARED_ROOM).emit("certInfo", monitorID, tlsInfo.info_json);
-        }
-    }
-
-    /**
-     * Send domain name information to client
-     * @param {Server} io Socket server instance
-     * @param {number} monitorID ID of monitor to send
-     * @returns {void}
-     */
-    static async sendDomainInfo(io, monitorID) {
-        const monitor = await R.findOne("monitor", "id = ?", [monitorID]);
-
-        try {
-            const supportInfo = await DomainExpiry.checkSupport(monitor);
-            const domain = await DomainExpiry.findByDomainNameOrCreate(supportInfo.domain);
-            if (domain?.expiry) {
-                io.to(SHARED_ROOM).emit("domainInfo", monitorID, domain.daysRemaining, new Date(domain.expiry));
-            }
-        } catch (e) {}
-    }
-
+    
+    
+    
     /**
      * Has status of monitor changed since last beat?
      * @param {boolean} isFirstBeat Is this the first beat of this monitor?

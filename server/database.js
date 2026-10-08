@@ -14,7 +14,6 @@ const { SimpleMigrationServer } = require("./utils/simple-migration-server");
 const BetterSqlite3Database = require("better-sqlite3");
 const KumaColumnCompiler = require("./utils/knex/lib/dialects/mysql2/schema/mysql2-columncompiler");
 const SqlString = require("sqlstring");
-const { auth } = require("./better-auth");
 
 /**
  * Database & App Data Folder
@@ -454,8 +453,10 @@ class Database {
             await this.initMariaDB();
         }
 
-        // Also connect better-auth
-        auth(true);
+        // Also connect better-auth. Required lazily: database.js and
+        // better-auth.js require each other, so a top-level require here
+        // can hand back a half-loaded module depending on who loads first.
+        require("./better-auth").auth(true);
     }
 
     /**

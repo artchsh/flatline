@@ -205,10 +205,14 @@ test("shared instance", async (t) => {
         assert.ok(row, "proxy is visible without an owner filter");
     });
 
-    await t.test("SHARED_ROOM is a stable constant", () => {
-        const { SHARED_ROOM } = require("../../server/shared-room");
-        assert.strictEqual(typeof SHARED_ROOM, "string");
-        assert.ok(SHARED_ROOM.length > 0);
+    await t.test("no Socket.IO room constant remains", () => {
+        // The shared room went away with the socket layer: with no sockets,
+        // there is nothing to address. Broadcasts are gone; the dashboard
+        // polls REST instead.
+        const fs = require("node:fs");
+        assert.ok(!fs.existsSync("server/shared-room.js"), "shared-room.js still exists");
+        assert.ok(!fs.existsSync("server/socket-handlers"), "socket-handlers/ still exists");
+        assert.ok(!fs.existsSync("server/client.js"), "client.js still exists");
     });
 
     await t.test("deleteMonitor removes a monitor created by another user", async () => {

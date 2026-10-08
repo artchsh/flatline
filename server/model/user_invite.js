@@ -183,6 +183,28 @@ class UserInvite extends BeanModel {
         const cutoff = dayjs().subtract(1, "day").format("YYYY-MM-DD HH:mm:ss");
         await R.exec("DELETE FROM user_invite WHERE expires < ?", [ cutoff ]);
     }
+
+    /**
+     * Periodically drop long-expired invites.
+     *
+     * Redeeming already refuses expired links, so this is only housekeeping
+     * to stop the table growing without bound. Moved here from the old
+     * socket handler when Socket.IO was removed: pruning is server
+     * behaviour, the socket layer just happened to host it.
+     * @returns {NodeJS.Timeout} The interval handle
+     */
+    static startInvitePruner() {
+        const { log } = require("../../src/util");
+        const timer = setInterval(() => {
+            UserInvite.pruneExpired().catch((e) => {
+                log.error("auth", `Failed to prune expired invites: ${e.message}`);
+            });
+        }, 60 * 60 * 1000);
+
+        // Do not hold the process open for housekeeping.
+        timer.unref?.();
+        return timer;
+    }
 }
 
 module.exports = UserInvite;

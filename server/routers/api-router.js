@@ -7,7 +7,6 @@ const {
     sendHttpError,
 } = require("../util-server");
 const { R } = require("redbean-node");
-const { SHARED_ROOM } = require("../shared-room");
 const apicache = require("../modules/apicache");
 const Monitor = require("../model/monitor");
 const dayjs = require("dayjs");
@@ -32,7 +31,6 @@ router.use(express.json({ limit: "256kb" }));
 
 let cache = apicache.middleware;
 const server = UptimeKumaServer.getInstance();
-let io = server.io;
 
 router.get("/api/entry-page", async (request, response) => {
     allowDevAllOrigin(response);
@@ -156,10 +154,6 @@ router.all("/api/push/:pushToken", async (request, response) => {
             log.error("router", `Dropping metrics for monitor ${monitor.id}: ${e.message}`);
         }
 
-        // Shared instance: broadcast to every logged-in user.
-        io.to(SHARED_ROOM).emit("heartbeat", bean.toJSON());
-
-        Monitor.sendStats(io, monitor.id);
 
         try {
             new Prometheus(monitor, await monitor.getTags()).update(bean, undefined);

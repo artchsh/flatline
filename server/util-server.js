@@ -1,4 +1,3 @@
-import { checkLogin as betterAuthCheckLogin } from "./better-auth";
 
 const ping = require("@louislam/ping");
 const { R } = require("redbean-node");
@@ -561,34 +560,6 @@ exports.checkStatusCode = function (status, acceptedCodes) {
 };
 
 /**
- * Get total number of clients in room
- * @param {Server} io Socket server instance
- * @param {string} roomName Name of room to check
- * @returns {number} Total clients in room
- */
-exports.getTotalClientInRoom = (io, roomName) => {
-    const sockets = io.sockets;
-
-    if (!sockets) {
-        return 0;
-    }
-
-    const adapter = sockets.adapter;
-
-    if (!adapter) {
-        return 0;
-    }
-
-    const room = adapter.rooms.get(roomName);
-
-    if (room) {
-        return room.size;
-    } else {
-        return 0;
-    }
-};
-
-/**
  * @deprecated Use allowDevOrigin
  * Allow CORS all origins if development
  * @param {object} res Response object from axios
@@ -636,17 +607,6 @@ exports.allowOrigin = (req, res) => {
     res.header("Access-Control-Allow-Methods", "GET, PUT, POST, DELETE, OPTIONS");
     res.header("Access-Control-Allow-Headers", "Origin, X-Requested-With, Content-Type, Accept");
     res.header("Access-Control-Allow-Credentials", "true");
-};
-
-/**
- * @deprecated Use better-auth's checkLogin
- * Check if a user is logged in
- * @param {Socket} socket Socket instance
- * @returns {void}
- * @throws The user is not logged in
- */
-exports.checkLogin = (socket) => {
-    betterAuthCheckLogin(socket);
 };
 
 /**

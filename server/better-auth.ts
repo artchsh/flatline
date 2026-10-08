@@ -5,7 +5,6 @@ import { genSecret, log } from "../src/util";
 import { R } from "redbean-node";
 import { username } from "better-auth/plugins";
 import { admin } from "better-auth/plugins";
-import { Socket } from "socket.io";
 import { haveIBeenPwned } from "better-auth/plugins";
 import { twoFactor } from "better-auth/plugins";
 import { apiKey } from "@better-auth/api-key";
@@ -21,7 +20,7 @@ let authInstance: ReturnType<typeof createAuthInstance>;
 
 /**
  * Get the singleton instance of better-auth
- * Mainly used for http and socket.io authentication
+ * Mainly used for password verification and account creation
  * @param force If true, create a new instance even if one already exists. Should only be used for testing or special cases.
  * @returns The singleton instance of better-auth
  */
@@ -238,18 +237,6 @@ export async function getDisableAuthSession(): ReturnType<typeof getSession> {
             token: "disable-auth",
         },
     };
-}
-
-/**
- * Check Login (Better Auth New!)
- * @param socket Socket.IO Socket
- * @throws Error if not logged in
- */
-export function checkLogin(socket: Socket) {
-    // @ts-ignore
-    if (!socket.session) {
-        throw new Error("You are not logged in.");
-    }
 }
 
 /**

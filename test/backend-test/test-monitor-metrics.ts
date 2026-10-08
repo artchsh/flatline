@@ -17,7 +17,7 @@ import TestDB from "../mock-testdb";
 
 const testDb = new TestDB();
 
-/** Minimal socket.io stub: no clients, emits go nowhere. */
+/** Minimal broadcast stub: the push endpoint used to emit over sockets. */
 function fakeIo() {
     return {
         sockets: null,

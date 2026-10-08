@@ -1,7 +1,6 @@
 const { BeanModel } = require("redbean-node/dist/bean-model");
 const { R } = require("redbean-node");
 const statusPageAuth = require("../status-page-auth");
-const { SHARED_ROOM } = require("../shared-room");
 const cheerio = require("cheerio");
 const { UptimeKumaServer } = require("../uptime-kuma-server");
 const jsesc = require("jsesc");
@@ -381,25 +380,6 @@ class StatusPage extends BeanModel {
             FROM status_page, status_page_cname
             WHERE status_page.id = status_page_cname.status_page_id
         `);
-    }
-
-    /**
-     * Send status page list to client
-     * @param {Server} io io Socket server instance
-     * @param {Socket} socket Socket.io instance
-     * @returns {Promise<Bean[]>} Status page list
-     */
-    static async sendStatusPageList(io, socket) {
-        let result = {};
-
-        let list = await R.findAll("status_page", " ORDER BY title ");
-
-        for (let item of list) {
-            result[item.id] = await item.toJSON();
-        }
-
-        io.to(SHARED_ROOM).emit("statusPageList", result);
-        return list;
     }
 
     /**

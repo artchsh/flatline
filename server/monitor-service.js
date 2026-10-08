@@ -360,7 +360,7 @@ async function startMonitor(monitorID) {
     }
 
     server.monitorList[monitor.id] = monitor;
-    await monitor.start(server.io);
+    await monitor.start();
 
     return monitor;
 }

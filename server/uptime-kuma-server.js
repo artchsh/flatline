@@ -2,10 +2,8 @@ const express = require("express");
 const https = require("https");
 const fs = require("fs");
 const http = require("http");
-const { Server } = require("socket.io");
 const { R } = require("redbean-node");
-const { log, isDev, devOriginList } = require("../src/util");
-const { SHARED_ROOM } = require("./shared-room");
+const { log } = require("../src/util");
 const Database = require("./database");
 const util = require("util");
 const { Settings } = require("./settings");
@@ -43,7 +41,6 @@ class UptimeKumaServer {
     entryPage = "dashboard";
     app = undefined;
     httpServer = undefined;
-    io = undefined;
 
     /**
      * Cache Index HTML
@@ -78,7 +75,7 @@ class UptimeKumaServer {
         // Set default axios timeout to 5 minutes instead of infinity
         axios.defaults.timeout = 300 * 1000;
 
-        log.info("server", "Creating express and socket.io instance");
+        log.info("server", "Creating express instance");
         this.app = express();
         if (isSSL) {
             log.info("server", "Server Type: HTTPS");
@@ -126,70 +123,6 @@ class UptimeKumaServer {
         UptimeKumaServer.monitorTypeList["sftp"] = new SFTPMonitorType();
         UptimeKumaServer.monitorTypeList["oracledb"] = new OracleDbMonitorType();
         UptimeKumaServer.monitorTypeList["ntp"] = new NTPMonitorType();
-
-        // Allow all CORS origins (polling) in development
-        let cors = undefined;
-        if (isDev) {
-            cors = {
-                origin: devOriginList,
-                credentials: true,
-                methods: ["GET", "POST"],
-            };
-        }
-
-        this.io = new Server(this.httpServer, {
-            cors,
-            cookie: true,
-            allowRequest: async (req, callback) => {
-                let transport;
-                // It should be always true, but just in case, because this property is not documented
-                if (req._query) {
-                    transport = req._query.transport;
-                } else {
-                    log.error("socket", "Ops!!! Cannot get transport type, assume that it is polling");
-                    transport = "polling";
-                }
-
-                const clientIP = await this.getClientIPwithProxy(req.connection.remoteAddress, req.headers);
-                log.info("socket", `New ${transport} connection, IP = ${clientIP}`);
-
-                // The following check is only for websocket connections, polling connections are already protected by CORS
-                if (transport === "polling") {
-                    callback(null, true);
-                } else if (transport === "websocket") {
-                    const bypass = process.env.UPTIME_KUMA_WS_ORIGIN_CHECK === "bypass";
-                    if (bypass) {
-                        log.info("auth", "WebSocket origin check is bypassed");
-                        callback(null, true);
-                    } else if (!req.headers.origin) {
-                        log.info("auth", "WebSocket with no origin is allowed");
-                        callback(null, true);
-                    } else {
-                        let host = req.headers.host;
-                        let origin = req.headers.origin;
-
-                        try {
-                            let originURL = new URL(origin);
-                            let xForwardedFor;
-                            if (await Settings.get("trustProxy")) {
-                                xForwardedFor = req.headers["x-forwarded-for"];
-                            }
-
-                            if (host !== originURL.host && xForwardedFor !== originURL.host) {
-                                callback(null, false);
-                                log.error("auth", `Origin (${origin}) does not match host (${host}), IP: ${clientIP}`);
-                            } else {
-                                callback(null, true);
-                            }
-                        } catch (e) {
-                            // Invalid origin url, probably not from browser
-                            callback(null, false);
-                            log.error("auth", `Invalid origin url (${origin}), IP: ${clientIP}`);
-                        }
-                    }
-                }
-            },
-        });
     }
 
     /**
@@ -224,42 +157,9 @@ class UptimeKumaServer {
         await this.loadMaintenanceList();
     }
 
-    /**
-     * Send list of monitors to client
-     * @param {Socket} socket Socket to send list on
-     * @returns {Promise<object>} List of monitors
-     */
-    async sendMonitorList(socket) {
-        // Shared instance: every user gets the same list, and the update is
-        // broadcast so other logged-in dashboards stay in sync.
-        let list = await this.getMonitorJSONList();
-        this.io.to(SHARED_ROOM).emit("monitorList", list);
-        return list;
-    }
-
-    /**
-     * Update Monitor into list
-     * @param {Socket} socket Socket to send list on
-     * @param {number} monitorID update or deleted monitor id
-     * @returns {Promise<void>}
-     */
-    async sendUpdateMonitorIntoList(socket, monitorID) {
-        let list = await this.getMonitorJSONList(null, monitorID);
-        if (list && list[monitorID]) {
-            this.io.to(SHARED_ROOM).emit("updateMonitorIntoList", list);
-        }
-    }
-
-    /**
-     * Delete Monitor from list
-     * @param {Socket} socket Socket to send list on
-     * @param {number} monitorID update or deleted monitor id
-     * @returns {Promise<void>}
-     */
-    async sendDeleteMonitorFromList(socket, monitorID) {
-        this.io.to(SHARED_ROOM).emit("deleteMonitorFromList", monitorID);
-    }
-
+    
+    
+    
     /**
      * Get a list of monitors.
      *
@@ -302,29 +202,8 @@ class UptimeKumaServer {
         return result;
     }
 
-    /**
-     * Send maintenance list to client
-     * @param {Socket} socket Socket.io instance to send to
-     * @returns {Promise<object>} Maintenance list
-     */
-    async sendMaintenanceList(socket) {
-        // Shared instance: maintenance windows are the same for everyone.
-        let list = await this.getMaintenanceJSONList();
-        this.io.to(SHARED_ROOM).emit("maintenanceList", list);
-        return list;
-    }
-
-    /**
-     * Send list of maintenances to all logged-in users.
-     *
-     * Replaces the old sendMaintenanceListByUserID(userID), which emitted to
-     * one user's room. Kept as an alias because callers still pass a userID.
-     * @returns {Promise<object>} Maintenance list
-     */
-    async sendMaintenanceListByUserID() {
-        return await this.sendMaintenanceList();
-    }
-
+    
+    
     /**
      * Get a list of maintenances.
      * @returns {Promise<object>} A promise that resolves to an object with maintenance IDs as keys and maintenances objects as values.
@@ -390,38 +269,8 @@ class UptimeKumaServer {
         errorLogStream.end();
     }
 
-    /**
-     * Get the IP of the client connected to the socket
-     * @param {Socket} socket Socket to query
-     * @returns {Promise<string>} IP of client
-     */
-    getClientIP(socket) {
-        return this.getClientIPwithProxy(socket.client.conn.remoteAddress, socket.client.conn.request.headers);
-    }
-
-    /**
-     * @param {string} clientIP Raw client IP
-     * @param {IncomingHttpHeaders} headers HTTP headers
-     * @returns {Promise<string>} Client IP with proxy (if trusted)
-     */
-    async getClientIPwithProxy(clientIP, headers) {
-        if (clientIP === undefined) {
-            clientIP = "";
-        }
-
-        if (await Settings.get("trustProxy")) {
-            const forwardedFor = headers["x-forwarded-for"];
-
-            return (
-                (typeof forwardedFor === "string" ? forwardedFor.split(",")[0].trim() : null) ||
-                headers["x-real-ip"] ||
-                clientIP.replace(/^::ffff:/, "")
-            );
-        } else {
-            return clientIP.replace(/^::ffff:/, "");
-        }
-    }
-
+    
+    
     /**
      * Attempt to get the current server timezone
      * If this fails, fall back to environment variables and then make a
@@ -566,24 +415,7 @@ class UptimeKumaServer {
         return "Uptime-Kuma/" + require("../package.json").version;
     }
 
-    /**
-     * Force connected sockets of a user to refresh and disconnect.
-     * Used for resetting password.
-     * @param {string} userID User ID
-     * @param {string?} currentSocketID Current socket ID
-     * @returns {void}
-     */
-    disconnectAllSocketClients(userID, currentSocketID = undefined) {
-        for (const socket of this.io.sockets.sockets.values()) {
-            if (socket.userID === userID && socket.id !== currentSocketID) {
-                try {
-                    socket.emit("refresh");
-                    socket.disconnect();
-                } catch (e) {}
-            }
-        }
     }
-}
 
 module.exports = {
     UptimeKumaServer,
