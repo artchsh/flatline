@@ -403,6 +403,13 @@ router.get("/api/v1", (req, res) => {
             tags: "/api/v1/tags",
             notifications: "/api/v1/notifications",
             health: "/api/v1/health",
+            auth: {
+                setup: "/api/v1/auth/setup",
+                login: "/api/v1/auth/login",
+                me: "/api/v1/auth/me",
+            },
+            users: "/api/v1/users",
+            invites: "/api/v1/invites",
         },
     });
 });

@@ -1016,6 +1016,132 @@
                     }
                 }
             }
+        },
+        "/api/v1/auth/setup": {
+            "get": {
+                "summary": "First-run setup status",
+                "description": "Unauthenticated. True when no account exists yet.",
+                "responses": {
+                    "200": {
+                        "description": "Setup state"
+                    }
+                }
+            }
+        },
+        "/api/v1/auth/login": {
+            "post": {
+                "summary": "Password login",
+                "description": "Unauthenticated, rate limited. Verifies password (+ TOTP when enrolled) and mints a full-scope token returned exactly once. Login tokens expire after 30 days.",
+                "responses": {
+                    "200": {
+                        "description": "Token and account"
+                    },
+                    "401": {
+                        "description": "Bad credentials, or TOTP required (error two_factor_required)."
+                    }
+                }
+            }
+        },
+        "/api/v1/auth/me": {
+            "get": {
+                "summary": "Own account",
+                "description": "Requires the `read` scope.",
+                "responses": {
+                    "200": {
+                        "description": "Account plus token scopes"
+                    }
+                }
+            }
+        },
+        "/api/v1/users": {
+            "get": {
+                "summary": "List accounts",
+                "description": "Requires the `read` scope.",
+                "responses": {
+                    "200": {
+                        "description": "Every account"
+                    }
+                }
+            }
+        },
+        "/api/v1/users/{id}": {
+            "patch": {
+                "summary": "Ban or unban an account",
+                "description": "Requires the `write` scope. Body: {banned: boolean}.",
+                "responses": {
+                    "200": {
+                        "description": "New ban state"
+                    }
+                }
+            },
+            "delete": {
+                "summary": "Delete an account",
+                "description": "Requires the `write` scope. Refuses the caller and the last account.",
+                "responses": {
+                    "200": {
+                        "description": "Deleted id"
+                    }
+                }
+            }
+        },
+        "/api/v1/invites": {
+            "get": {
+                "summary": "List own invite links",
+                "description": "Requires the `read` scope.",
+                "responses": {
+                    "200": {
+                        "description": "Invite links"
+                    }
+                }
+            },
+            "post": {
+                "summary": "Mint an invite link",
+                "description": "Requires the `write` scope. The plaintext token is returned exactly once.",
+                "responses": {
+                    "200": {
+                        "description": "Invite id, token and expiry"
+                    }
+                }
+            }
+        },
+        "/api/v1/invites/{id}": {
+            "delete": {
+                "summary": "Revoke an invite",
+                "description": "Requires the `write` scope. Only the minter's own unused links.",
+                "responses": {
+                    "200": {
+                        "description": "Revoked id"
+                    }
+                }
+            }
+        },
+        "/api/v1/auth/invites/{token}": {
+            "get": {
+                "summary": "Check an invite link",
+                "description": "Unauthenticated. Lets a signup form show expiry before submit.",
+                "responses": {
+                    "200": {
+                        "description": "Invite status"
+                    },
+                    "410": {
+                        "description": "Used or expired."
+                    }
+                }
+            }
+        },
+        "/api/v1/auth/invites/{token}/redeem": {
+            "post": {
+                "summary": "Redeem an invite",
+                "description": "Unauthenticated and rate limited. Creates the account; validation failures do not burn the link.",
+                "responses": {
+                    "200": {
+                        "description": "Created username"
+                    },
+                    "410": {
+                        "description": "Used or expired."
+                    }
+                }
+            }
         }
     }
 }
