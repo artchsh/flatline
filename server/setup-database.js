@@ -1,6 +1,5 @@
 const express = require("express");
 const { log } = require("../src/util");
-const expressStaticGzip = require("express-static-gzip");
 const fs = require("fs");
 const path = require("path");
 const Database = require("./database");
@@ -146,7 +145,11 @@ class SetupDatabase {
             });
 
             app.get("/", async (request, response) => {
-                response.redirect("/setup-database");
+                response.json({
+                    ok: true,
+                    setup: "database",
+                    message: "No database configured. POST dbConfig to /setup-database, or set UPTIME_KUMA_DB_* env vars and restart.",
+                });
             });
 
             app.get("/api/entry-page", async (request, response) => {
@@ -292,15 +295,8 @@ class SetupDatabase {
                 }
             });
 
-            app.use(
-                "/",
-                expressStaticGzip("dist", {
-                    enableBrotli: true,
-                })
-            );
-
-            app.get("*", async (_request, response) => {
-                response.send(this.server.indexHTML);
+            app.use((request, response) => {
+                response.status(404).json({ ok: false, error: "not_found", message: "Database setup is pending. See GET /." });
             });
 
             app.options("*", async (_request, response) => {

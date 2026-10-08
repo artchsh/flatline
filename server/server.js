@@ -102,7 +102,6 @@ log.info("server", "Loading modules");
 
 log.debug("server", "Importing express");
 const express = require("express");
-const expressStaticGzip = require("express-static-gzip");
 log.debug("server", "Importing redbean-node");
 const { R } = require("redbean-node");
 log.debug("server", "Importing http-graceful-shutdown");
@@ -245,28 +244,20 @@ app.use(function (req, res, next) {
     // ***************************
 
     // Entry Page
+    // The backend is API-only and never serves HTML. Custom domains and
+    // status pages are served by the Next.js status-site app, which resolves
+    // hosts through /api/status-page/resolve-host; the operator dashboard is
+    // a separate Vite app. This index exists so a browser pointed at the API
+    // gets a pointer, not a redirect into an app that lives elsewhere.
     app.get("/", async (request, response) => {
-        let hostname = request.hostname;
-        if (await setting("trustProxy")) {
-            const proxy = request.headers["x-forwarded-host"];
-            if (proxy) {
-                hostname = proxy;
-            }
-        }
-
-        log.debug("entry", `Request Domain: ${hostname}`);
-
-        const uptimeKumaEntryPage = server.entryPage;
-        if (hostname in StatusPage.domainMappingList) {
-            log.debug("entry", "This is a status page domain");
-
-            let slug = StatusPage.domainMappingList[hostname];
-            await StatusPage.handleStatusPageResponse(response, server.indexHTML, slug);
-        } else if (uptimeKumaEntryPage && uptimeKumaEntryPage.startsWith("statusPage-")) {
-            response.redirect("/status/" + uptimeKumaEntryPage.replace("statusPage-", ""));
-        } else {
-            response.redirect("/dashboard");
-        }
+        response.json({
+            ok: true,
+            name: "Flatline API",
+            version: "v1",
+            documentation: "/api/v1/openapi.json",
+            dashboard: "Run the dashboard app (apps/dashboard) against this origin.",
+            statusSite: "Run the status-site app (apps/status-site) against this origin.",
+        });
     });
 
     app.get("/setup-database-info", (request, response) => {
@@ -321,14 +312,10 @@ app.use(function (req, res, next) {
         });
     }
 
-    // Robots.txt
+    // Robots.txt — API-only: nothing here is crawlable.
     app.get("/robots.txt", async (_request, response) => {
-        let txt = "User-agent: *\nDisallow:";
-        if (!(await setting("searchEngineIndex"))) {
-            txt += " /";
-        }
         response.setHeader("Content-Type", "text/plain");
-        response.send(txt);
+        response.send("User-agent: *\nDisallow: /");
     });
 
     // Basic Auth Router here
@@ -336,13 +323,6 @@ app.use(function (req, res, next) {
     // Prometheus API metrics  /metrics
     // With Basic Auth using the first user's username/password
     app.get("/metrics", apiAuth, prometheusAPIMetrics());
-
-    app.use(
-        "/",
-        expressStaticGzip("dist", {
-            enableBrotli: true,
-        })
-    );
 
     // ./data/upload
     app.use("/upload", express.static(Database.uploadDir));
@@ -373,12 +353,18 @@ app.use(function (req, res, next) {
     const betterAuthRouter = await createBetterAuthRouter();
     app.use(betterAuthRouter);
 
-    // Universal Route Handler, must be at the end of all express routes.
-    app.get("*", async (_request, response) => {
-        if (_request.originalUrl.startsWith("/upload/")) {
-            response.status(404).send("File not found.");
+    // Catch-all, must be at the end of all express routes. The backend
+    // serves no HTML, so anything that is not an API route is a JSON 404 —
+    // never the old SPA shell.
+    app.use(async (request, response) => {
+        if (request.originalUrl.startsWith("/upload/")) {
+            response.status(404).json({ ok: false, error: "not_found", message: "File not found." });
         } else {
-            response.send(server.indexHTML);
+            response.status(404).json({
+                ok: false,
+                error: "not_found",
+                message: `No route for ${request.method} ${request.path}. See GET /api/v1.`,
+            });
         }
     });
 

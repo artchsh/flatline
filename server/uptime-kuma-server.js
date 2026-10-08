@@ -95,15 +95,9 @@ class UptimeKumaServer {
             this.httpServer = http.createServer(this.app);
         }
 
-        try {
-            this.indexHTML = fs.readFileSync("./dist/index.html").toString();
-        } catch (e) {
-            // "dist/index.html" is not necessary for development
-            if (process.env.NODE_ENV !== "development") {
-                log.error("server", "Error: Cannot find 'dist/index.html', did you install correctly?");
-                process.exit(1);
-            }
-        }
+        // The backend is API-only: it never serves HTML, so it must boot
+        // without a frontend build on disk. `indexHTML` stays as the empty
+        // string it initialises to; nothing reads it anymore.
 
         // Set Monitor Types
         UptimeKumaServer.monitorTypeList["real-browser"] = new RealBrowserMonitorType();

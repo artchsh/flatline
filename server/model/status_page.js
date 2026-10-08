@@ -54,7 +54,7 @@ class StatusPage extends BeanModel {
             response.type("application/rss+xml");
             response.send(await StatusPage.renderRSS(statusPage, feedUrl));
         } else {
-            response.status(404).send(UptimeKumaServer.getInstance().indexHTML);
+            response.status(404).type("text/plain").send("Status page not found.");
         }
     }
 
@@ -86,7 +86,7 @@ class StatusPage extends BeanModel {
         if (statusPage) {
             response.send(await StatusPage.renderHTML(indexHTML, statusPage));
         } else {
-            response.status(404).send(UptimeKumaServer.getInstance().indexHTML);
+            response.status(404).type("text/plain").send("Status page not found.");
         }
     }
 

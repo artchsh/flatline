@@ -1,6 +1,5 @@
 let express = require("express");
 const apicache = require("../modules/apicache");
-const { UptimeKumaServer } = require("../uptime-kuma-server");
 const StatusPage = require("../model/status_page");
 const { allowDevAllOrigin, sendHttpError } = require("../util-server");
 const { R } = require("redbean-node");
@@ -17,7 +16,6 @@ router.use(express.urlencoded({ extended: false }));
 router.use(express.json({ limit: "64kb" }));
 
 let cache = apicache.middleware;
-const server = UptimeKumaServer.getInstance();
 
 /**
  * Unlock a password-protected status page.
@@ -100,11 +98,9 @@ router.get("/api/status-page/resolve-host", async (request, response) => {
     });
 });
 
-router.get("/status/:slug", async (request, response) => {
-    let slug = request.params.slug;
-    slug = slug.toLowerCase();
-    await StatusPage.handleStatusPageResponse(response, server.indexHTML, slug, request);
-});
+// The backend is API-only and never serves status HTML: the Next.js
+// status-site app renders pages from the JSON endpoints below. These data
+// routes are what it reads; the old /status/:slug HTML routes are gone.
 
 // Not cached. A cached 401 would lock out a legitimate visitor and a
 // cached 200 would serve a password-protected page to anyone.
@@ -114,15 +110,8 @@ router.get("/status/:slug/rss", async (request, response) => {
     await StatusPage.handleStatusPageRSSResponse(response, slug, request);
 });
 
-router.get("/status", async (request, response) => {
-    let slug = "default";
-    await StatusPage.handleStatusPageResponse(response, server.indexHTML, slug, request);
-});
-
-router.get("/status-page", async (request, response) => {
-    let slug = "default";
-    await StatusPage.handleStatusPageResponse(response, server.indexHTML, slug, request);
-});
+// (Old HTML routes /status, /status-page and /status/:slug removed with the
+// Vue frontend. The status-site app renders from the JSON endpoints below.)
 
 // Status page config, incident, monitor list
 // Not cached: the cache is keyed on path and ignores cookies, so a cached 401
