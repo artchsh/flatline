@@ -34,3 +34,7 @@ apps/*/node_modules
 apps/*/.next
 apps/*/out
 packages/*/node_modules
+
+# Local dev servers (./dev.sh): databases and logs.
+.dev-data
+.dev-logs
