@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
     ApiError,
-    fetchLatestMetrics,
+    fetchLatestMetricsBulk,
     fetchMonitors,
     getToken,
     setToken,
@@ -42,23 +42,29 @@ function intParam(params: URLSearchParams, key: string, fallback: number, min: n
 }
 
 /**
- * Open a monitor's metrics as a board entry, or null when it has none.
+ * Open monitors' metrics as board entries in one request.
  *
- * A 404 is not an error here: it is exactly how the board discovers which
- * monitors are servers. Any other failure propagates.
- * @param monitor Roster entry
- * @returns The sample, or null
+ * A null sample is not an error: it is exactly how the board discovers which
+ * monitors are servers. Any transport failure propagates.
+ * @param monitors Roster entries with metrics candidates
+ * @returns One entry per monitor that has a sample
  */
-async function toFleetServer(monitor: MonitorSummary): Promise<FleetServer | null> {
-    try {
-        const res = await fetchLatestMetrics(monitor.id);
-        return { monitor, time: res.time, metrics: res.metrics };
-    } catch (e) {
-        if (e instanceof ApiError && e.status === 404) {
-            return null;
-        }
-        throw e;
+async function toFleetServers(monitors: MonitorSummary[]): Promise<FleetServer[]> {
+    if (monitors.length === 0) {
+        return [];
     }
+
+    const res = await fetchLatestMetricsBulk(monitors.map((m) => m.id));
+    const out: FleetServer[] = [];
+
+    for (const monitor of monitors) {
+        const sample = res.samples[monitor.id];
+        if (sample) {
+            out.push({ monitor, time: sample.time, metrics: sample.metrics });
+        }
+    }
+
+    return out;
 }
 
 /**
@@ -114,17 +120,17 @@ function Superboard({ kiosk, onDisconnect }: { kiosk: boolean; onDisconnect: () 
 
                 // Groups are containers, not servers; anything else that has
                 // recent metrics is one. Zero configuration, and a server that
-                // stops pushing ages out of the board on its own.
+                // stops pushing ages out of the board on its own. One bulk
+                // request, not one per monitor, so the board sips the rate
+                // budget instead of drinking it.
                 const candidates = roster.monitors.filter((m) => m.type !== "group" && m.active !== false);
-                const samples = await Promise.all(candidates.map((m) => toFleetServer(m)));
+                const next = await toFleetServers(candidates);
 
                 if (!alive) {
                     return;
                 }
 
                 const weights = new Map(roster.monitors.map((m) => [ m.id, m ]));
-
-                const next = samples.filter((s): s is FleetServer => s !== null);
 
                 // Operator-controlled order: parent group weight, then the
                 // monitor's own weight, then name. Ties fall back to name so

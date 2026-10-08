@@ -2,7 +2,7 @@ const basicAuth = require("express-basic-auth");
 const passwordHash = require("./password-hash");
 const { R } = require("redbean-node");
 const { log } = require("../src/util");
-const { loginRateLimiter, apiRateLimiter } = require("./rate-limiter");
+const { loginRateLimiter, apiRateLimiter, apiKeyRateLimiter, apiAbuseLimiter } = require("./rate-limiter");
 const { Settings } = require("./settings");
 const dayjs = require("dayjs");
 const { checkPassword } = require("./better-auth");
@@ -304,25 +304,37 @@ exports.tokenAuth = function (requiredScope = "read") {
             return;
         }
 
-        // API Rate Limit, shared with the existing basic-auth API.
-        let pass = await apiRateLimiter.removeTokens(1);
-        if (pass < 0) {
-            res.status(429).json({
-                ok: false,
-                error: "rate_limited",
-                message: "Too frequently, try again later.",
-            });
-            return;
-        }
-
         let apiKeyBean = await resolveAPIKey(token);
 
         if (!apiKeyBean) {
+            // Unresolvable tokens get no bucket; cap them globally so a
+            // credential-stuffing flood still throttles.
+            if ((await apiAbuseLimiter.removeTokens(1)) < 0) {
+                res.status(429).json({
+                    ok: false,
+                    error: "rate_limited",
+                    message: "Too frequently, try again later.",
+                });
+                return;
+            }
             log.warn("api-auth", "Failed API auth attempt: invalid, expired or inactive token");
             res.status(401).set("WWW-Authenticate", "Bearer").json({
                 ok: false,
                 error: "unauthorized",
                 message: "Invalid, expired or inactive API token.",
+            });
+            return;
+        }
+
+        // Authenticated traffic is limited per key (600/min), so one chatty
+        // client — a dashboard polling fleet metrics, say — only throttles
+        // itself, never every other token.
+        if ((await apiKeyRateLimiter.removeTokens(apiKeyBean.id, 1)) < 0) {
+            log.warn("api-auth", `Rate limit exceeded for API key ${apiKeyBean.id}`);
+            res.status(429).json({
+                ok: false,
+                error: "rate_limited",
+                message: "Too frequently, try again later.",
             });
             return;
         }

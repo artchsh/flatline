@@ -277,16 +277,19 @@ export interface LatestMetrics {
 }
 
 /**
- * Fetch the most recent metrics sample for a monitor.
+ * Fetch the most recent metrics samples for many monitors at once.
  *
- * Throws an ApiError with status 404 when the monitor has never pushed
- * metrics — that is the normal way the Superboard discovers which monitors
- * are servers, so callers are expected to treat 404 as "not a server".
- * @param id Monitor id
- * @returns The newest sample and its timestamp
+ * Unknown ids and monitors without samples come back as null entries, which
+ * is how the Superboard discovers servers without paying a request per id.
+ * @param ids Monitor ids (max 200)
+ * @returns Samples keyed by monitor id, null where missing
  */
-export function fetchLatestMetrics(id: number): Promise<LatestMetrics> {
-    return request(`/api/v1/monitors/${id}/metrics/latest`);
+export function fetchLatestMetricsBulk(ids: number[]): Promise<{
+    ok: true;
+    count: number;
+    samples: Record<number, { time: string; metrics: MetricsPayload } | null>;
+}> {
+    return request(`/api/v1/monitors/metrics/latest?ids=${ids.join(",")}`);
 }
 
 export interface ApiKeySummary {

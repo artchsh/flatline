@@ -121,10 +121,172 @@ function HealthStrip({ health }: { health: HealthSummary }) {
 }
 
 /**
- * The monitor table.
+ * Sort key for roster order: heavier floats up, ties break by name so the
+ * list never reshuffles between refreshes. Matches the server's canonical
+ * ordering (weight DESC, name).
+ */
+function byWeightThenName(a: MonitorSummary, b: MonitorSummary): number {
+    return (b.weight ?? 0) - (a.weight ?? 0) || a.name.localeCompare(b.name);
+}
+
+/**
+ * Split the roster into group sections.
  *
- * Dense by design: a row is one line, numbers are tabular so columns align,
- * and select-then-act is keyboard reachable.
+ * Groups are monitors with type "group"; anything with a matching parent
+ * lands in its section, the rest falls into Ungrouped. Group monitors never
+ * render as rows themselves.
+ */
+interface GroupSection {
+    id: number | null;
+    name: string;
+    monitors: MonitorSummary[];
+}
+
+function groupMonitors(monitors: MonitorSummary[]): GroupSection[] {
+    const groups = monitors
+        .filter((m) => m.type === "group")
+        .sort(byWeightThenName);
+    const groupIds = new Set(groups.map((g) => g.id));
+
+    const children = new Map<number, MonitorSummary[]>();
+    const ungrouped: MonitorSummary[] = [];
+
+    for (const monitor of monitors) {
+        if (monitor.type === "group") {
+            continue;
+        }
+        if (monitor.parent != null && groupIds.has(monitor.parent)) {
+            const list = children.get(monitor.parent) ?? [];
+            list.push(monitor);
+            children.set(monitor.parent, list);
+        } else {
+            ungrouped.push(monitor);
+        }
+    }
+
+    const sections: GroupSection[] = groups.map((group) => ({
+        id: group.id as number,
+        name: group.name,
+        monitors: (children.get(group.id) ?? []).sort(byWeightThenName),
+    }));
+
+    if (ungrouped.length > 0) {
+        sections.push({ id: null, name: "Ungrouped", monitors: ungrouped.sort(byWeightThenName) });
+    }
+
+    return sections;
+}
+
+/**
+ * One monitor row. Status is never colour alone; a word always accompanies it.
+ */
+function MonitorRow({
+    monitor,
+    selected,
+    onToggle,
+    onEdit,
+}: {
+    monitor: MonitorSummary;
+    selected: Set<number>;
+    onToggle: (id: number) => void;
+    onEdit: (id: number) => void;
+}) {
+    const status = statusOf(monitor.status);
+    const isSelected = selected.has(monitor.id);
+
+    return (
+        <tr
+            key={monitor.id}
+            data-selected={isSelected || undefined}
+            className="border-b border-border/60 last:border-0 hover:bg-surface data-[selected]:bg-surface"
+        >
+            <td className="py-2 pl-4">
+                <input
+                    type="checkbox"
+                    checked={isSelected}
+                    onChange={() => onToggle(monitor.id)}
+                    aria-label={`Select ${monitor.name}`}
+                    className="size-3.5 accent-[var(--primary)]"
+                />
+            </td>
+            <td className="py-2 pr-4 pl-1">
+                {/* Name and target on one line: this view is for
+                    scanning many rows, so vertical space in a row
+                    is the scarce resource. */}
+                <div className="flex items-baseline gap-2 truncate">
+                    <button
+                        type="button"
+                        onClick={() => onEdit(monitor.id)}
+                        className="truncate font-medium hover:text-primary hover:underline"
+                    >
+                        {monitor.name}
+                    </button>
+                    <span className="truncate text-xs text-quiet">
+                        {monitor.url ?? monitor.lastMessage ?? "—"}
+                    </span>
+                </div>
+            </td>
+            <td className="py-2 whitespace-nowrap">
+                <Badge tone={status.tone}>
+                    <span className="size-1.5 rounded-full bg-current" />
+                    {status.label}
+                </Badge>
+                {!monitor.active ? (
+                    <span className="ml-2 text-[11px] text-quiet">paused</span>
+                ) : null}
+            </td>
+            <td className="tnum py-2 pl-3 text-right whitespace-nowrap">{formatUptime(monitor.uptime24h)}</td>
+            <td className="tnum py-2 pl-3 text-right whitespace-nowrap">{formatUptime(monitor.uptime7d)}</td>
+            <td className="tnum py-2 pl-3 text-right whitespace-nowrap">{formatPing(monitor.ping)}</td>
+            <td className="tnum py-2 pl-3 text-right whitespace-nowrap text-quiet">
+                {ageOf(monitor.lastCheck)} ago
+            </td>
+            <td className="py-2 pr-4 pl-3 text-xs whitespace-nowrap text-quiet">{monitor.type}</td>
+        </tr>
+    );
+}
+
+/**
+ * Column widths, shared by the flat and grouped tables so columns align.
+ */
+function MonitorColgroup() {
+    return (
+        <colgroup>
+            <col className="w-8" />
+            <col className="w-[30rem]" />
+            <col className="w-32" />
+            <col className="w-20" />
+            <col className="w-20" />
+            <col className="w-20" />
+            <col className="w-24" />
+            <col className="w-24" />
+        </colgroup>
+    );
+}
+
+/**
+ * Table header, shared by the flat and grouped tables.
+ */
+function MonitorHead() {
+    return (
+        <thead>
+            <tr className="border-b border-border text-left text-xs tracking-wide text-muted-foreground uppercase">
+                <th className="w-8 py-2 pl-4" />
+                <th className="py-2 pl-1 font-medium">Monitor</th>
+                <th className="w-32 py-2 font-medium">Status</th>
+                <th className="w-20 py-2 pl-3 text-right font-medium whitespace-nowrap">24h</th>
+                <th className="w-20 py-2 pl-3 text-right font-medium whitespace-nowrap">7d</th>
+                <th className="w-20 py-2 pl-3 text-right font-medium whitespace-nowrap">Ping</th>
+                <th className="w-24 py-2 pl-3 text-right font-medium whitespace-nowrap">Checked</th>
+                <th className="w-24 py-2 pr-4 pl-3 font-medium whitespace-nowrap">Type</th>
+            </tr>
+        </thead>
+    );
+}
+
+/**
+ * Flat table: every row, no sections. Used for search results, where
+ * grouping would hide matches inside collapsed sections.
  */
 function MonitorTable({
     monitors,
@@ -144,85 +306,121 @@ function MonitorTable({
             until their headers collide. Fixed widths keep rows comparable down
             a column, which is the point of this view. */}
         <table className="w-full table-fixed border-collapse text-sm">
-            <colgroup>
-                <col className="w-8" />
-                <col className="w-[30rem]" />
-                <col className="w-32" />
-                <col className="w-20" />
-                <col className="w-20" />
-                <col className="w-20" />
-                <col className="w-24" />
-                <col className="w-24" />
-            </colgroup>
-            <thead>
-                <tr className="border-b border-border text-left text-xs tracking-wide text-muted-foreground uppercase">
-                    <th className="w-8 py-2 pl-4" />
-                    <th className="py-2 pl-1 font-medium">Monitor</th>
-                    <th className="w-32 py-2 font-medium">Status</th>
-                    <th className="w-20 py-2 pl-3 text-right font-medium whitespace-nowrap">24h</th>
-                    <th className="w-20 py-2 pl-3 text-right font-medium whitespace-nowrap">7d</th>
-                    <th className="w-20 py-2 pl-3 text-right font-medium whitespace-nowrap">Ping</th>
-                    <th className="w-24 py-2 pl-3 text-right font-medium whitespace-nowrap">Checked</th>
-                    <th className="w-24 py-2 pr-4 pl-3 font-medium whitespace-nowrap">Type</th>
-                </tr>
-            </thead>
+            <MonitorColgroup />
+            <MonitorHead />
             <tbody>
-                {monitors.map((monitor) => {
-                    const status = statusOf(monitor.status);
-                    const isSelected = selected.has(monitor.id);
+                {monitors.map((monitor) => (
+                    <MonitorRow
+                        key={monitor.id}
+                        monitor={monitor}
+                        selected={selected}
+                        onToggle={onToggle}
+                        onEdit={onEdit}
+                    />
+                ))}
+            </tbody>
+        </table>
+        </div>
+    );
+}
 
-                    return (
-                        <tr
-                            key={monitor.id}
-                            data-selected={isSelected || undefined}
-                            className="border-b border-border/60 last:border-0 hover:bg-surface data-[selected]:bg-surface"
-                        >
-                            <td className="py-2 pl-4">
-                                <input
-                                    type="checkbox"
-                                    checked={isSelected}
-                                    onChange={() => onToggle(monitor.id)}
-                                    aria-label={`Select ${monitor.name}`}
-                                    className="size-3.5 accent-[var(--primary)]"
-                                />
-                            </td>
-                            <td className="py-2 pr-4 pl-1">
-                                {/* Name and target on one line: this view is for
-                                    scanning many rows, so vertical space in a row
-                                    is the scarce resource. */}
-                                <div className="flex items-baseline gap-2 truncate">
+/**
+ * Grouped table: one collapsible section per group, ungrouped last.
+ *
+ * Collapse state persists in localStorage so the board keeps the shape the
+ * operator left it in across refreshes.
+ */
+function GroupedTable({
+    sections,
+    selected,
+    onToggle,
+    onEdit,
+}: {
+    sections: GroupSection[];
+    selected: Set<number>;
+    onToggle: (id: number) => void;
+    onEdit: (id: number) => void;
+}) {
+    const [collapsed, setCollapsed] = useState<Set<number>>(() => {
+        try {
+            const raw = window.localStorage.getItem("flatline.collapsedGroups");
+            return new Set(raw ? (JSON.parse(raw) as number[]) : []);
+        } catch {
+            return new Set();
+        }
+    });
+
+    function toggle(id: number) {
+        setCollapsed((prev) => {
+            const next = new Set(prev);
+            if (next.has(id)) {
+                next.delete(id);
+            } else {
+                next.add(id);
+            }
+            try {
+                window.localStorage.setItem("flatline.collapsedGroups", JSON.stringify([ ...next ]));
+            } catch {
+                // Storage can be unavailable; collapsing just will not persist.
+            }
+            return next;
+        });
+    }
+
+    return (
+        <div className="overflow-x-auto">
+        <table className="w-full table-fixed border-collapse text-sm">
+            <MonitorColgroup />
+            <MonitorHead />
+            {sections.map((section) => {
+                const down = section.monitors.filter((m) => m.status === 0).length;
+                const isCollapsed = section.id !== null && collapsed.has(section.id);
+
+                return (
+                    <tbody key={section.id ?? "ungrouped"}>
+                        <tr className="border-b border-border bg-surface/60">
+                            <td colSpan={8} className="py-1.5 pr-4 pl-4">
+                                {section.id !== null ? (
                                     <button
                                         type="button"
-                                        onClick={() => onEdit(monitor.id)}
-                                        className="truncate font-medium hover:text-primary hover:underline"
+                                        onClick={() => toggle(section.id as number)}
+                                        aria-expanded={!isCollapsed}
+                                        className="inline-flex items-center gap-2 text-xs font-semibold tracking-wide uppercase hover:text-primary"
                                     >
-                                        {monitor.name}
+                                        <span className="inline-block w-3 text-quiet">{isCollapsed ? "▸" : "▾"}</span>
+                                        {section.name}
                                     </button>
-                                    <span className="truncate text-xs text-quiet">
-                                        {monitor.url ?? monitor.lastMessage ?? "—"}
+                                ) : (
+                                    <span className="inline-flex items-center gap-2 text-xs font-semibold tracking-wide text-quiet uppercase">
+                                        <span className="inline-block w-3" />
+                                        {section.name}
                                     </span>
-                                </div>
+                                )}
+                                <span className="ml-2 text-xs text-quiet">
+                                    <span className="tnum">{section.monitors.length}</span>
+                                    {down > 0 ? (
+                                        <span className="ml-1 font-semibold text-bad">
+                                            · <span className="tnum">{down}</span> down
+                                        </span>
+                                    ) : (
+                                        <span className="ml-1">· all up</span>
+                                    )}
+                                </span>
                             </td>
-                            <td className="py-2 whitespace-nowrap">
-                                <Badge tone={status.tone}>
-                                    <span className="size-1.5 rounded-full bg-current" />
-                                    {status.label}
-                                </Badge>
-                                {!monitor.active ? (
-                                    <span className="ml-2 text-[11px] text-quiet">paused</span>
-                                ) : null}
-                            </td>
-                            <td className="tnum py-2 pl-3 text-right whitespace-nowrap">{formatUptime(monitor.uptime24h)}</td>
-                            <td className="tnum py-2 pl-3 text-right whitespace-nowrap">{formatUptime(monitor.uptime7d)}</td>
-                            <td className="tnum py-2 pl-3 text-right whitespace-nowrap">{formatPing(monitor.ping)}</td>
-                            <td className="tnum py-2 pl-3 text-right whitespace-nowrap text-quiet">
-                                {ageOf(monitor.lastCheck)} ago
-                            </td>
-                            <td className="py-2 pr-4 pl-3 text-xs whitespace-nowrap text-quiet">{monitor.type}</td>
                         </tr>
-                    );
-                })}
-            </tbody>
+                        {!isCollapsed &&
+                            section.monitors.map((monitor) => (
+                                <MonitorRow
+                                    key={monitor.id}
+                                    monitor={monitor}
+                                    selected={selected}
+                                    onToggle={onToggle}
+                                    onEdit={onEdit}
+                                />
+                            ))}
+                    </tbody>
+                );
+            })}
         </table>
         </div>
     );
@@ -471,9 +669,30 @@ function Dashboard({ inviteToken }: { inviteToken: string | null }) {
                 <p className="px-4 py-10 text-center text-sm text-quiet">
                     {monitors.length === 0 ? "No monitors yet." : "Nothing matches that search."}
                 </p>
-            ) : (
+            ) : query.trim() ? (
                 <MonitorTable
                     monitors={filtered}
+                    selected={selected}
+                    onToggle={(id) =>
+                        setSelected((prev) => {
+                            const next = new Set(prev);
+                            if (next.has(id)) {
+                                next.delete(id);
+                            } else {
+                                next.add(id);
+                            }
+                            return next;
+                        })
+                    }
+                    onEdit={(id) => {
+                        setAgentsOpen(false);
+                        setUsersOpen(false);
+                        setDetailId(id);
+                    }}
+                />
+            ) : (
+                <GroupedTable
+                    sections={groupMonitors(monitors)}
                     selected={selected}
                     onToggle={(id) =>
                         setSelected((prev) => {

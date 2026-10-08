@@ -1142,6 +1142,31 @@
                     }
                 }
             }
+        },
+        "/api/v1/monitors/metrics/latest": {
+            "get": {
+                "summary": "Latest metrics samples, batched",
+                "description": "Requires the `read` scope. One query for up to 200 monitors; unknown ids and monitors without samples come back as null entries. Register before /monitors/{id}/metrics/latest so Express does not read \"metrics\" as an id.",
+                "parameters": [
+                    {
+                        "name": "ids",
+                        "in": "query",
+                        "required": true,
+                        "schema": {
+                            "type": "string",
+                            "example": "4,5,6"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Samples keyed by monitor id, null where missing"
+                    },
+                    "400": {
+                        "$ref": "#/components/responses/BadRequest"
+                    }
+                }
+            }
         }
     }
 }

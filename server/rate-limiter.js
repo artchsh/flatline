@@ -72,6 +72,57 @@ const apiRateLimiter = new KumaRateLimiter({
     errorMessage: "Too frequently, try again later.",
 });
 
+/**
+ * Per-API-key rate limiter.
+ *
+ * The global apiRateLimiter above is one bucket shared by every caller: a
+ * single dashboard polling Superboard metrics (one request per server per
+ * refresh) could starve every other client. Authenticated traffic is
+ * therefore limited per key instead, so one chatty client only throttles
+ * itself. Buckets are created lazily per key id; keys are few and long
+ * lived, so no eviction is needed.
+ */
+class KeyedRateLimiter {
+    /**
+     * @param {object} config RateLimiter config (tokensPerInterval, interval)
+     */
+    constructor(config) {
+        this.config = config;
+        this.buckets = new Map();
+    }
+
+    /**
+     * Consume tokens from a key's bucket.
+     * @param {string|number} keyId API key id the bucket belongs to
+     * @param {number} num Tokens to consume
+     * @returns {Promise<number>} Remaining tokens (negative when over limit)
+     */
+    async removeTokens(keyId, num = 1) {
+        let bucket = this.buckets.get(keyId);
+        if (!bucket) {
+            const { RateLimiter } = require("limiter");
+            bucket = new RateLimiter({ ...this.config, fireImmediately: true });
+            this.buckets.set(keyId, bucket);
+        }
+        return await bucket.removeTokens(num);
+    }
+}
+
+const apiKeyRateLimiter = new KeyedRateLimiter({
+    tokensPerInterval: 600,
+    interval: "minute",
+});
+
+// Invalid tokens never resolve to a key, so they cannot have a bucket.
+// Cap them globally instead: low enough to blunt credential stuffing, high
+// enough that a typo'd token in a retry loop does not lock out the network.
+const apiAbuseLimiter = new KumaRateLimiter({
+    tokensPerInterval: 120,
+    interval: "minute",
+    fireImmediately: true,
+    errorMessage: "Too frequently, try again later.",
+});
+
 // Invite redemption is unauthenticated: the token is the only credential, so
 // this caps attempts per IP. Tokens are 32 random bytes so guessing is already
 // infeasible; this is belt and braces against a flood of requests.
@@ -85,5 +136,7 @@ const inviteRateLimiter = new KumaRateLimiter({
 module.exports = {
     loginRateLimiter,
     apiRateLimiter,
+    apiKeyRateLimiter,
+    apiAbuseLimiter,
     inviteRateLimiter,
 };

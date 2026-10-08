@@ -395,6 +395,7 @@ router.get("/api/v1", (req, res) => {
             heartbeats: "/api/v1/monitors/{id}/heartbeats",
             metrics: "/api/v1/monitors/{id}/metrics",
             latestMetrics: "/api/v1/monitors/{id}/metrics/latest",
+            latestMetricsBulk: "/api/v1/monitors/metrics/latest?ids={ids}",
             incidents: "/api/v1/incidents",
             statusPages: "/api/v1/status-pages",
             maintenance: "/api/v1/maintenance",
@@ -760,6 +761,63 @@ router.get("/api/v1/monitors/:id/heartbeats", tokenAuth("read"), async (req, res
         });
     } catch (e) {
         log.error("api-v1", `GET /heartbeats failed: ${e.message}`);
+        fail(res, 500, "server_error", e.message);
+    }
+});
+
+/**
+ * Most recent metrics samples for many monitors at once.
+ *
+ * The Superboard polls one sample per server per refresh; without this it
+ * fans out to dozens of requests and eats its own rate budget. Unknown ids
+ * and monitors with no samples come back as null entries rather than
+ * failing the batch — a 404 per id is exactly how the board discovers
+ * which monitors are servers, and that must stay cheap.
+ * @param {express.Request} req Express request
+ * @param {express.Response} res Express response
+ * @returns {Promise<void>}
+ */
+router.get("/api/v1/monitors/metrics/latest", tokenAuth("read"), async (req, res) => {
+    try {
+        const raw = String(req.query.ids ?? "");
+        const ids = [ ...new Set(
+            raw.split(",").map((s) => s.trim()).filter((s) => /^[0-9]+$/.test(s)).map(Number)
+        ) ].slice(0, 200);
+
+        if (ids.length === 0) {
+            fail(res, 400, "bad_request", "`ids` must be a comma-separated list of monitor ids, e.g. ?ids=4,5,6 (max 200).");
+            return;
+        }
+
+        // Newest by time, not by id — same ordering as the single-sample
+        // endpoint, since late samples can arrive out of order.
+        const placeholders = ids.map(() => "?").join(",");
+        const rows = await R.getAll(
+            `SELECT monitor_id, time, payload FROM (
+                SELECT monitor_id, time, payload,
+                    ROW_NUMBER() OVER (PARTITION BY monitor_id ORDER BY time DESC, id DESC) AS rn
+                FROM monitor_metric WHERE monitor_id IN (${placeholders})
+            ) WHERE rn = 1`,
+            ids
+        );
+
+        const byId = new Map();
+        for (const row of rows) {
+            try {
+                byId.set(row.monitor_id, { time: row.time, metrics: JSON.parse(row.payload) });
+            } catch {
+                // Skip an unreadable row rather than failing the batch.
+            }
+        }
+
+        const samples = {};
+        for (const id of ids) {
+            samples[id] = byId.get(id) ?? null;
+        }
+
+        res.json({ ok: true, count: ids.length, samples });
+    } catch (e) {
+        log.error("api-v1", `GET /metrics/latest bulk failed: ${e.message}`);
         fail(res, 500, "server_error", e.message);
     }
 });

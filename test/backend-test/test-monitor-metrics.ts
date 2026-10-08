@@ -322,4 +322,24 @@ test("monitor metrics read API", async (t) => {
         assert.strictEqual((await get("/api/v1/monitors/999999/metrics/latest")).status, 404);
         assert.strictEqual((await get("/api/v1/monitors/999999/metrics")).status, 404);
     });
+
+    await t.test("bulk latest returns samples keyed by id, null where missing", async () => {
+        const { status, body } = await get(`/api/v1/monitors/metrics/latest?ids=${monitorID},999999`);
+        assert.strictEqual(status, 200);
+        assert.strictEqual(body.count, 2);
+        assert.strictEqual(body.samples[monitorID].metrics.cpu.percent, 20);
+        assert.strictEqual(body.samples["999999"], null);
+    });
+
+    await t.test("bulk latest ignores garbage ids and requires at least one", async () => {
+        assert.strictEqual((await get("/api/v1/monitors/metrics/latest")).status, 400);
+        assert.strictEqual((await get("/api/v1/monitors/metrics/latest?ids=nope")).status, 400);
+        const { status, body } = await get(`/api/v1/monitors/metrics/latest?ids=nope,${monitorID},${monitorID}`);
+        assert.strictEqual(status, 200);
+        assert.strictEqual(body.count, 1, "garbage dropped, duplicates collapsed");
+    });
+
+    await t.test("bulk latest requires auth", async () => {
+        assert.strictEqual((await get(`/api/v1/monitors/metrics/latest?ids=${monitorID}`, null)).status, 401);
+    });
 });
