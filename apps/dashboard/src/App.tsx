@@ -14,9 +14,10 @@ import {
 import { MonitorForm } from "@/components/MonitorForm";
 import { MonitorDetail } from "@/components/MonitorDetail";
 import { AgentPanel } from "@/components/AgentPanel";
+import { UsersPanel } from "@/components/UsersPanel";
 import { TokenGate } from "@/components/TokenGate";
 import { SuperboardApp } from "@/components/Superboard";
-import { navigate, usePath } from "@/lib/router";
+import { inviteTokenFrom, navigate, usePath } from "@/lib/router";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -230,7 +231,7 @@ function MonitorTable({
 /**
  * The operator's monitor table.
  */
-function Dashboard() {
+function Dashboard({ inviteToken }: { inviteToken: string | null }) {
     const [authed, setAuthed] = useState(() => Boolean(getToken()));
     const [health, setHealth] = useState<HealthSummary | null>(null);
     const [monitors, setMonitors] = useState<MonitorSummary[]>([]);
@@ -245,6 +246,7 @@ function Dashboard() {
     >(null);
     const [detailId, setDetailId] = useState<number | null>(null);
     const [agentsOpen, setAgentsOpen] = useState(false);
+    const [usersOpen, setUsersOpen] = useState(false);
 
     async function load() {
         try {
@@ -339,7 +341,7 @@ function Dashboard() {
     }
 
     if (!authed) {
-        return <TokenGate onSaved={() => setAuthed(true)} />;
+        return <TokenGate inviteToken={inviteToken} onSaved={() => setAuthed(true)} />;
     }
 
     return (
@@ -365,6 +367,16 @@ function Dashboard() {
                 <div className="ml-auto flex items-center gap-2">
                     <Button size="sm" variant="outline" onClick={() => navigate("/superboard")}>
                         Superboard
+                    </Button>
+                    <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => {
+                            setDetailId(null);
+                            setUsersOpen((v) => !v);
+                        }}
+                    >
+                        Users
                     </Button>
                     <Button
                         size="sm"
@@ -432,7 +444,14 @@ function Dashboard() {
                 </div>
             ) : null}
 
-            {agentsOpen ? (
+            {usersOpen ? (
+                <UsersPanel
+                    onClose={() => {
+                        setUsersOpen(false);
+                        void load();
+                    }}
+                />
+            ) : agentsOpen ? (
                 <AgentPanel
                     onClose={() => {
                         setAgentsOpen(false);
@@ -469,6 +488,7 @@ function Dashboard() {
                     }
                     onEdit={(id) => {
                         setAgentsOpen(false);
+                        setUsersOpen(false);
                         setDetailId(id);
                     }}
                 />
@@ -504,17 +524,18 @@ function Dashboard() {
 /**
  * Application root.
  *
- * Three routes: the monitor table at "/", the wall board at "/superboard", and
- * the chrome-free board at "/superboard/kiosk". The route is resolved before
- * either view mounts, so the dashboard's polling never runs while the board is
- * open.
+ * Four routes: the monitor table at "/", the wall board at "/superboard",
+ * the chrome-free board at "/superboard/kiosk", and invite redemption at
+ * "/invite/:token". The route is resolved before either view mounts, so the
+ * dashboard's polling never runs while the board is open.
  */
 export default function App() {
     const path = usePath();
+    const inviteToken = inviteTokenFrom(path);
 
     if (path === "/superboard" || path === "/superboard/kiosk") {
         return <SuperboardApp kiosk={path === "/superboard/kiosk"} />;
     }
 
-    return <Dashboard />;
+    return <Dashboard inviteToken={inviteToken} />;
 }

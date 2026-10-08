@@ -337,3 +337,152 @@ export function setApiKeyActive(id: number, active: boolean): Promise<{ ok: true
 export function deleteApiKey(id: number): Promise<{ ok: true; deleted: number }> {
     return request(`/api/v1/api-keys/${id}`, { method: "DELETE" });
 }
+
+// ---------------------------------------------------------------------------
+// Authentication, setup, invites and account administration.
+//
+// The dashboard signs operators in with a username and password and stores
+// the minted bearer token — the same credential shape an agent uses. No
+// session cookie, no Socket.IO.
+// ---------------------------------------------------------------------------
+
+export interface AuthUser {
+    id: string;
+    username: string | null;
+    name: string;
+    banned?: boolean;
+}
+
+/**
+ * Whether the instance still needs first-run setup.
+ */
+export function fetchSetupStatus(): Promise<{ ok: true; setupNeeded: boolean }> {
+    return request("/api/v1/auth/setup");
+}
+
+/**
+ * Create the first account. Only works before setup completes.
+ */
+export function createFirstAccount(payload: { username: string; password: string }): Promise<{ ok: true }> {
+    return request("/api/setup", {
+        method: "POST",
+        body: JSON.stringify(payload),
+    });
+}
+
+export interface LoginResult {
+    ok: true;
+    token: string;
+    user: AuthUser;
+}
+
+/**
+ * Password login. Mints a full-scope token returned exactly once — the
+ * caller persists it via setToken. Throws an ApiError with code
+ * "two_factor_required" when the account needs a TOTP code; retry with it.
+ */
+export function login(payload: { username: string; password: string; totp?: string }): Promise<LoginResult> {
+    return request("/api/v1/auth/login", {
+        method: "POST",
+        body: JSON.stringify(payload),
+    });
+}
+
+/**
+ * The current token's account and scopes.
+ */
+export function fetchMe(): Promise<{ ok: true; user: AuthUser; scopes: string[] }> {
+    return request("/api/v1/auth/me");
+}
+
+export interface UserSummary {
+    id: string;
+    name: string;
+    email: string;
+    username: string | null;
+    createdAt: string;
+    banned: boolean;
+    isCurrent: boolean;
+}
+
+/**
+ * List every account.
+ */
+export function fetchUsers(): Promise<{ ok: true; count: number; users: UserSummary[] }> {
+    return request("/api/v1/users");
+}
+
+/**
+ * Delete an account. Refuses the caller and the last remaining account.
+ */
+export function deleteUser(id: string): Promise<{ ok: true; deleted: string }> {
+    return request(`/api/v1/users/${encodeURIComponent(id)}`, { method: "DELETE" });
+}
+
+/**
+ * Ban or unban an account. A ban drops live sessions immediately.
+ */
+export function setUserBanned(id: string, banned: boolean): Promise<{ ok: true; id: string; banned: boolean }> {
+    return request(`/api/v1/users/${encodeURIComponent(id)}`, {
+        method: "PATCH",
+        body: JSON.stringify({ banned }),
+    });
+}
+
+export interface InviteSummary {
+    id: number;
+    note: string | null;
+    createdDate: string;
+    expires: string;
+    usedAt: string | null;
+    status: string;
+}
+
+/**
+ * List own invite links.
+ */
+export function fetchInvites(): Promise<{ ok: true; count: number; invites: InviteSummary[] }> {
+    return request("/api/v1/invites");
+}
+
+/**
+ * Mint a single-use invite link. The plaintext token comes back exactly once.
+ */
+export function createInvite(payload: { note?: string; expiryHours?: number } = {}): Promise<{
+    ok: true;
+    inviteID: number;
+    token: string;
+    expires: string;
+}> {
+    return request("/api/v1/invites", {
+        method: "POST",
+        body: JSON.stringify(payload),
+    });
+}
+
+/**
+ * Revoke an unused invite.
+ */
+export function revokeInvite(id: number): Promise<{ ok: true; revoked: number }> {
+    return request(`/api/v1/invites/${id}`, { method: "DELETE" });
+}
+
+/**
+ * Check an invite link without redeeming it.
+ */
+export function checkInvite(token: string): Promise<{ ok: true; status: string; expires: string; note: string | null }> {
+    return request(`/api/v1/auth/invites/${encodeURIComponent(token)}`);
+}
+
+/**
+ * Redeem an invite, creating the account.
+ */
+export function redeemInvite(token: string, payload: { username: string; password: string }): Promise<{
+    ok: true;
+    username: string;
+}> {
+    return request(`/api/v1/auth/invites/${encodeURIComponent(token)}/redeem`, {
+        method: "POST",
+        body: JSON.stringify(payload),
+    });
+}

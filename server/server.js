@@ -349,6 +349,11 @@ app.use(function (req, res, next) {
     const statusPageRouter = require("./routers/status-page-router");
     app.use(statusPageRouter);
 
+    // Auth REST: password login, setup status, invites and account
+    // administration. The dashboard's only credential flow; no sessions.
+    const authRouter = require("./routers/auth-router");
+    app.use(authRouter);
+
     // better auth API Router
     const betterAuthRouter = await createBetterAuthRouter();
     app.use(betterAuthRouter);

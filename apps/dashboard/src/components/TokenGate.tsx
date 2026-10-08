@@ -1,62 +1,259 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type { SyntheticEvent } from "react";
-import { ApiError, fetchHealth, setToken } from "@/lib/api";
+import {
+    ApiError,
+    checkInvite,
+    createFirstAccount,
+    fetchSetupStatus,
+    login,
+    redeemInvite,
+    setToken,
+} from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 
+function errorMessage(e: unknown, fallback: string): string {
+    if (e instanceof ApiError) {
+        return e.message;
+    }
+    return e instanceof Error ? e.message : fallback;
+}
+
 /**
- * Token gate. Both the dashboard and the Superboard are useless without a
- * token, so each asks for one up front rather than showing an empty view and a
- * wall of 401s.
- *
- * The token is validated against /health before it is persisted, so a typo
- * fails here and not on every subsequent request.
+ * Username + password form shared by sign-in and first-run setup.
  */
-export function TokenGate({ onSaved }: { onSaved: () => void }) {
-    const [value, setValue] = useState("");
-    const [error, setError] = useState<string | null>(null);
+function CredentialsForm({
+    submitLabel,
+    error,
+    busy,
+    showTotp,
+    onSubmit,
+}: {
+    submitLabel: string;
+    error: string | null;
+    busy: boolean;
+    showTotp: boolean;
+    onSubmit: (username: string, password: string, totp: string) => void;
+}) {
+    const [username, setUsername] = useState("");
+    const [password, setPassword] = useState("");
+    const [totp, setTotp] = useState("");
 
     async function submit(event: SyntheticEvent) {
         event.preventDefault();
-        setError(null);
-        setToken(value.trim());
+        onSubmit(username.trim(), password, totp.trim());
+    }
 
+    return (
+        <form onSubmit={submit}>
+            {error ? (
+                <div className="mb-3 rounded-md bg-destructive/12 px-2.5 py-2 text-xs text-destructive">{error}</div>
+            ) : null}
+
+            <label className="mb-3 block">
+                <span className="mb-1 block text-xs text-muted-foreground">Username</span>
+                <Input
+                    value={username}
+                    onChange={(e) => setUsername(e.target.value)}
+                    autoComplete="username"
+                    autoFocus
+                    required
+                />
+            </label>
+
+            <label className="mb-3 block">
+                <span className="mb-1 block text-xs text-muted-foreground">Password</span>
+                <Input
+                    type="password"
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                    autoComplete={submitLabel === "Create account" ? "new-password" : "current-password"}
+                    required
+                />
+            </label>
+
+            {showTotp ? (
+                <label className="mb-3 block">
+                    <span className="mb-1 block text-xs text-muted-foreground">Two-factor code</span>
+                    <Input
+                        value={totp}
+                        onChange={(e) => setTotp(e.target.value)}
+                        autoComplete="one-time-code"
+                        inputMode="numeric"
+                        autoFocus
+                        required
+                    />
+                </label>
+            ) : null}
+
+            <Button type="submit" className="mt-1 w-full" disabled={busy}>
+                {busy ? "…" : submitLabel}
+            </Button>
+        </form>
+    );
+}
+
+/**
+ * Sign-in, first-run setup and invite redemption in one gate.
+ *
+ * The dashboard holds a bearer token, not a session cookie, so signing in
+ * mints a token and stores it. Setup and invites are part of the same screen
+ * because a fresh instance has no other entry point: setup creates the first
+ * account, and everyone after that arrives on an invite link.
+ */
+export function TokenGate({ inviteToken, onSaved }: { inviteToken: string | null; onSaved: () => void }) {
+    const [mode, setMode] = useState<"loading" | "login" | "setup" | "invite">("loading");
+    const [setupNeeded, setSetupNeeded] = useState(false);
+    const [inviteNote, setInviteNote] = useState<string | null>(null);
+    const [inviteError, setInviteError] = useState<string | null>(null);
+    const [error, setError] = useState<string | null>(null);
+    const [busy, setBusy] = useState(false);
+    const [totpRequired, setTotpRequired] = useState(false);
+
+    useEffect(() => {
+        let alive = true;
+
+        async function init() {
+            // An invite link decides the mode on its own; anything else
+            // depends on whether the instance has an account yet.
+            if (inviteToken) {
+                try {
+                    const checked = await checkInvite(inviteToken);
+                    if (!alive) {
+                        return;
+                    }
+                    setInviteNote(checked.note);
+                    setMode("invite");
+                } catch (e) {
+                    if (!alive) {
+                        return;
+                    }
+                    setInviteError(errorMessage(e, "This invite link is not valid."));
+                    setMode("invite");
+                }
+                return;
+            }
+
+            try {
+                const status = await fetchSetupStatus();
+                if (!alive) {
+                    return;
+                }
+                setSetupNeeded(status.setupNeeded);
+                setMode(status.setupNeeded ? "setup" : "login");
+            } catch (e) {
+                if (!alive) {
+                    return;
+                }
+                // The backend is unreachable; the login form is still useful
+                // because its error will say so.
+                setError(errorMessage(e, "Could not reach the Flatline server."));
+                setMode("login");
+            }
+        }
+
+        void init();
+        return () => {
+            alive = false;
+        };
+    }, [ inviteToken ]);
+
+    async function saveToken(token: string) {
+        setToken(token);
+        onSaved();
+    }
+
+    async function doLogin(username: string, password: string, totp: string) {
+        setError(null);
+        setBusy(true);
         try {
-            await fetchHealth();
-            onSaved();
+            const res = await login({ username, password, ...(totp ? { totp } : {}) });
+            await saveToken(res.token);
         } catch (e) {
-            setToken(null);
-            setError(e instanceof ApiError ? e.message : "Could not reach the Flatline server.");
+            if (e instanceof ApiError && e.code === "two_factor_required") {
+                setTotpRequired(true);
+                setError("Two-factor code required — enter it below and sign in again.");
+            } else {
+                setToken(null);
+                setError(errorMessage(e, "Could not reach the Flatline server."));
+            }
+        } finally {
+            setBusy(false);
+        }
+    }
+
+    async function doSetup(username: string, password: string) {
+        setError(null);
+        setBusy(true);
+        try {
+            await createFirstAccount({ username, password });
+            const res = await login({ username, password });
+            await saveToken(res.token);
+        } catch (e) {
+            setError(errorMessage(e, "Could not reach the Flatline server."));
+        } finally {
+            setBusy(false);
+        }
+    }
+
+    async function doRedeem(username: string, password: string) {
+        setError(null);
+        setBusy(true);
+        try {
+            if (!inviteToken) {
+                return;
+            }
+            const redeemed = await redeemInvite(inviteToken, { username, password });
+            const res = await login({ username: redeemed.username, password });
+            await saveToken(res.token);
+        } catch (e) {
+            setError(errorMessage(e, "Could not redeem this invite."));
+        } finally {
+            setBusy(false);
         }
     }
 
     return (
         <div className="flex min-h-screen items-center justify-center p-6">
-            <form onSubmit={submit} className="w-full max-w-sm rounded-lg border border-border bg-card p-6">
+            <div className="w-full max-w-sm rounded-lg border border-border bg-card p-6">
                 <h1 className="m-0 text-base font-semibold">Flatline</h1>
-                <p className="mt-1 mb-4 text-xs text-muted-foreground">
-                    Paste an API token. Create one under Settings → API Keys, or give the dashboard a
-                    read-only token if it only needs to look.
-                </p>
 
-                {error ? (
-                    <div className="mb-3 rounded-md bg-destructive/12 px-2.5 py-2 text-xs text-destructive">{error}</div>
-                ) : null}
-
-                <Input
-                    type="password"
-                    value={value}
-                    onChange={(e) => setValue(e.target.value)}
-                    placeholder="uk1_…"
-                    autoComplete="off"
-                    autoFocus
-                    required
-                />
-
-                <Button type="submit" className="mt-3 w-full">
-                    Connect
-                </Button>
-            </form>
+                {mode === "loading" ? (
+                    <p className="mt-1 text-xs text-muted-foreground">Connecting…</p>
+                ) : mode === "setup" ? (
+                    <>
+                        <p className="mt-1 mb-4 text-xs text-muted-foreground">
+                            No accounts exist yet. Create the first operator account.
+                        </p>
+                        <CredentialsForm submitLabel="Create account" error={error} busy={busy} showTotp={false} onSubmit={doSetup} />
+                    </>
+                ) : mode === "invite" ? (
+                    <>
+                        <p className="mt-1 mb-4 text-xs text-muted-foreground">
+                            {inviteError ?? (
+                                <>
+                                    You were invited to Flatline{inviteNote ? ` (${inviteNote})` : ""}. Choose a
+                                    username and password.
+                                </>
+                            )}
+                        </p>
+                        {inviteError ? (
+                            <Button variant="outline" className="w-full" onClick={() => setMode(setupNeeded ? "setup" : "login")}>
+                                Back to sign in
+                            </Button>
+                        ) : (
+                            <CredentialsForm submitLabel="Accept invite" error={error} busy={busy} showTotp={false} onSubmit={doRedeem} />
+                        )}
+                    </>
+                ) : (
+                    <>
+                        <p className="mt-1 mb-4 text-xs text-muted-foreground">
+                            Sign in with your operator account. A token is minted for this browser.
+                        </p>
+                        <CredentialsForm submitLabel="Sign in" error={error} busy={busy} showTotp={totpRequired} onSubmit={doLogin} />
+                    </>
+                )}
+            </div>
         </div>
     );
 }

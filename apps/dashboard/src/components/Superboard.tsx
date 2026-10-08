@@ -350,7 +350,7 @@ export function SuperboardApp({ kiosk }: { kiosk: boolean }) {
     }, []);
 
     if (!authed) {
-        return <TokenGate onSaved={() => setAuthed(true)} />;
+        return <TokenGate inviteToken={null} onSaved={() => setAuthed(true)} />;
     }
 
     return <Superboard kiosk={kiosk} onDisconnect={disconnect} />;

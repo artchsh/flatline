@@ -118,10 +118,15 @@ done
 )
 
 # Operator dashboard. --host is required: Vite binds to localhost by default,
-# which is unreachable from another machine.
+# which is unreachable from another machine. VITE_FLATLINE_URL is baked in at
+# start, so it must be an address the browser can reach: the LAN IP, which
+# works from this machine and every other machine on the network. A hostname
+# does not resolve reliably (notably on macOS), and 127.0.0.1 would break LAN
+# browsers, so neither is used.
+LAN_IP_NOW="$(ipconfig getifaddr en0 2>/dev/null || hostname -I 2>/dev/null | awk '{print $1}' || echo "127.0.0.1")"
 (
     cd "$ROOT/apps/dashboard"
-    VITE_FLATLINE_URL="http://$(hostname):$BACKEND_PORT" \
+    VITE_FLATLINE_URL="http://$LAN_IP_NOW:$BACKEND_PORT" \
     start_one "dashboard" npx vite --host 0.0.0.0 --port "$DASH_PORT"
 )
 
@@ -132,11 +137,9 @@ LAN_IP="$(ipconfig getifaddr en0 2>/dev/null || echo "this-host")"
 echo
 echo "  backend     http://$LAN_IP:$BACKEND_PORT"
 echo "  status site http://$LAN_IP:$STATUS_PORT/status/northwind"
-echo "  dashboard   http://$LAN_IP:$DASH_PORT   (token: uk1_tok-full)"
+echo "  dashboard   http://$LAN_IP:$DASH_PORT"
 echo
 echo "  ./dev.sh status   check health"
 echo "  ./dev.sh logs     follow logs"
 echo "  ./dev.sh stop     stop everything"
 echo
-echo "Note: the VITE_FLATLINE_URL baked into the dashboard points at the backend"
-echo "by hostname, so it must be reachable by that name from the browser."
