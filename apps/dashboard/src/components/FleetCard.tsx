@@ -161,18 +161,6 @@ export function FleetCard({ server }: { server: FleetServer }) {
     const dockerError = metrics.dockerError;
     const running = containers.filter((c) => c.state === "running");
     const unhealthy = containers.filter((c) => c.health !== undefined && c.health !== "healthy");
-    const stopped = containers.length - running.length;
-    const troubled = new Set([ ...unhealthy, ...containers.filter((c) => c.health === undefined && c.state === "restarting") ]);
-    const troubledNames = [ ...troubled ].map((c) => c.name ?? "?");
-
-    // Every container on one tooltip line: name, state and uptime. The row
-    // itself stays one line; the details are one hover away.
-    const containerTip = containers
-        .map((c) => {
-            const up = formatDuration(c.uptime);
-            return `${c.name ?? "?"}: ${c.state ?? "?"}${c.health ? ` (${c.health})` : ""}${up ? ` · up ${up}` : ""}`;
-        })
-        .join("\n");
 
     return (
         <div
@@ -268,26 +256,59 @@ export function FleetCard({ server }: { server: FleetServer }) {
                 })}
             </div>
 
-            <div className="mt-auto flex items-baseline justify-between gap-2 border-t border-border/60 pt-2 text-xs">
-                <span className="truncate text-quiet" title={containerTip || dockerError || troubledNames.join(", ")}>
-                    {containers.length === 0 ? (
-                        dockerError ? (
-                            <span className="font-semibold text-warn">containers unavailable</span>
-                        ) : (
-                            "no containers"
-                        )
-                    ) : (
-                        <>
-                            <span className="tnum">{running.length}</span>/{containers.length} containers up
+            <div className="mt-auto border-t border-border/60 pt-2">
+                <div className="mb-1 flex items-baseline justify-between gap-2">
+                    <span className="text-xs font-medium tracking-wide text-muted-foreground uppercase">
+                        Containers
+                    </span>
+                    {containers.length > 0 ? (
+                        <span className="text-xs text-quiet">
+                            <span className="tnum">{running.length}</span>/{containers.length} up
                             {unhealthy.length > 0 ? (
                                 <span className="ml-1 font-semibold text-bad">· {unhealthy.length} unhealthy</span>
-                            ) : stopped > 0 ? (
-                                <span className="ml-1 text-quiet">· {stopped} stopped</span>
                             ) : null}
-                        </>
-                    )}
-                </span>
-                {stale ? <span className="shrink-0 font-semibold text-warn">stale</span> : null}
+                        </span>
+                    ) : null}
+                </div>
+                {containers.length === 0 ? (
+                    dockerError ? (
+                        <p className="text-xs font-semibold text-warn" title={dockerError}>
+                            containers unavailable
+                        </p>
+                    ) : (
+                        <p className="text-xs text-quiet">no containers</p>
+                    )
+                ) : (
+                    <ul className="max-h-28 space-y-1 overflow-y-auto">
+                        {containers.map((c) => {
+                            // Uptime counts only while running: a stopped
+                            // container "started 8d ago" is not "up 8d".
+                            const up = c.state === "running" ? formatDuration(c.uptime) : null;
+                            const tone =
+                                c.state === "running" && (c.health === undefined || c.health === "healthy")
+                                    ? "text-ok"
+                                    : c.state === "running"
+                                      ? "text-bad"
+                                      : "text-quiet";
+                            return (
+                                <li key={c.name ?? c.image} className="flex items-baseline gap-2 text-xs">
+                                    <span className="min-w-0 flex-1 truncate font-medium" title={c.image ?? undefined}>
+                                        {c.name ?? "?"}
+                                    </span>
+                                    <span className={`inline-flex shrink-0 items-center gap-1 whitespace-nowrap ${tone}`}>
+                                        <span className="size-1.5 rounded-full bg-current" />
+                                        {c.state ?? "?"}
+                                        {c.health !== undefined && c.health !== "healthy" ? ` (${c.health})` : ""}
+                                    </span>
+                                    <span className="tnum w-10 shrink-0 text-right whitespace-nowrap text-quiet">
+                                        {up ? `up ${up}` : "—"}
+                                    </span>
+                                </li>
+                            );
+                        })}
+                    </ul>
+                )}
+                {stale ? <p className="mt-1 text-xs font-semibold text-warn">stale</p> : null}
             </div>
         </div>
     );
