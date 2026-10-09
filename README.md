@@ -56,6 +56,30 @@ tokens. Sign in with a username and password; the dashboard mints a token for
 the browser. Agents use `POST /api/v1/api-keys` (or the dashboard's Agents
 panel) for theirs.
 
+### Live updates
+
+The operator dashboard and Superboard use bearer-authenticated SSE
+(`/api/v1/events`) rather than roster polling. REST snapshots recover state on
+connect/reconnect; heartbeat changes arrive as soon as checks finish.
+External monitor check frequencies do not change.
+
+[Superboard agent 1.2](superboard/README.md) supports 1Hz CPU/RAM telemetry with
+independent slower collectors. Latest samples are cached; live history is
+sampled every 30s and retained for 30 days. Existing explicit agent intervals
+are preserved until changed. Upgrade the backend before enabling 1Hz agents.
+
+Use a single backend process. If reverse-proxying `/api/v1/events`, disable
+response buffering and allow connections longer than the 15s keepalive.
+For a repeatable isolated 10-server / three-client benchmark:
+
+```sh
+TEST_BACKEND=1 node --import=tsx extra/benchmark-live.mjs
+```
+
+The benchmark reports HTTP-ingest-to-stream latency, not remote collection or
+browser paint latency. See [SUPERBOARD-SPEC.md](SUPERBOARD-SPEC.md) for limits
+and restart/durability behavior.
+
 ## 🔧 How to Install
 
 ### Local dev
@@ -75,6 +99,10 @@ database it asks you to create the first operator account. `./dev.sh stop`
 stops everything; `./dev.sh status` checks health.
 
 ### 🐳 Docker
+
+For the single-host office deployment behind Cloudflare Tunnel, use
+[`compose.production.yaml`](compose.production.yaml) and the
+[office deployment/rollback guide](docker/OFFICE-DEPLOYMENT.md).
 
 ```bash
 mkdir flatline && cd flatline

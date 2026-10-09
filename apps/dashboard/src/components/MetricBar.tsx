@@ -11,7 +11,7 @@ export type BarTone = "ok" | "warn" | "bad" | "muted";
  * @returns Tone to render
  */
 export function usageTone(percent: number | undefined): BarTone {
-    if (percent === undefined || Number.isNaN(percent)) {
+    if (percent === undefined || !Number.isFinite(percent)) {
         return "muted";
     }
     if (percent >= 90) {
@@ -24,7 +24,7 @@ export function usageTone(percent: number | undefined): BarTone {
 }
 
 const FILL: Record<BarTone, string> = {
-    ok: "bg-ok",
+    ok: "bg-muted",
     warn: "bg-warn",
     bad: "bg-bad",
     muted: "bg-quiet",
@@ -48,21 +48,21 @@ export function MetricBar({
     detail?: string;
     tone?: BarTone;
 }) {
-    const safe = percent === undefined || Number.isNaN(percent) ? null : Math.max(0, Math.min(100, percent));
+    const safe = percent === undefined || !Number.isFinite(percent) ? null : Math.max(0, Math.min(100, percent));
     const resolved = tone ?? usageTone(percent ?? undefined);
 
     return (
-        <div>
+        <div className="metric-bar">
             <div className="flex items-baseline justify-between gap-2">
-                <span className="text-xs font-medium tracking-wide text-muted-foreground uppercase">{label}</span>
-                <span className="tnum text-sm font-semibold">
+                <span className="metric-label min-w-0 truncate text-xs font-medium tracking-wide text-muted-foreground uppercase" title={label}>{label}</span>
+                <span className="metric-value tnum text-sm font-semibold">
                     {safe === null ? "—" : `${safe.toFixed(safe < 10 ? 1 : 0)}%`}
-                    {detail ? <span className="ml-2 text-xs font-normal text-quiet">{detail}</span> : null}
                 </span>
             </div>
-            <div className="mt-1 h-2 overflow-hidden rounded-full bg-surface-2">
+            {detail ? <p className="metric-detail mt-1 text-xs text-quiet">{detail}</p> : null}
+            <div className="metric-track mt-2 h-2 overflow-hidden rounded-full bg-white/10">
                 <div
-                    className={cn("h-full rounded-full transition-[width] duration-500", FILL[resolved])}
+                    className={cn("h-full rounded-full transition-[width] duration-300 motion-reduce:transition-none", FILL[resolved])}
                     style={{ width: safe === null ? "0%" : `${safe}%` }}
                 />
             </div>

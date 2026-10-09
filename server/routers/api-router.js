@@ -78,6 +78,23 @@ router.all("/api/push/:pushToken", async (request, response) => {
 
         const previousHeartbeat = await Monitor.getPreviousHeartbeat(monitor.id);
 
+        // Opt-in telemetry cadence: keep the latest sample live at 1Hz without
+        // running notifications/uptime/heartbeat persistence on every sample.
+        // Down/maintenance/recovery and legacy pushes always use the full path.
+        const telemetry = request.method === "POST" && request.query.telemetry === "1" && request.body?.metrics != null;
+        const now = dayjs.utc();
+        const heartbeatSpacing = Math.max(1, Math.min(30, monitor.interval / 3));
+        if (telemetry && !monitor.isUpsideDown() && statusFromParam === UP && previousHeartbeat?.status === UP &&
+            now.diff(dayjs.utc(previousHeartbeat.time), "millisecond") < heartbeatSpacing * 1000 &&
+            !(await Monitor.isUnderMaintenance(monitor.id))) {
+            try {
+                await storeMetrics(monitor.id, R.isoDateTimeMillis(now), request.body.metrics, { live: true });
+                return response.json({ ok: true });
+            } catch (e) {
+                return response.status(400).json({ ok: false, msg: `Metrics dropped: ${e.message}` });
+            }
+        }
+
         let isFirstBeat = true;
 
         let bean = R.dispense("heartbeat");
@@ -141,6 +158,7 @@ router.all("/api/push/:pushToken", async (request, response) => {
         }
 
         await R.store(bean);
+        require("../live-updates").publishHeartbeat(bean, uptimeCalculator);
 
         // Superboard metrics, if the agent sent any. Stored separately from the
         // heartbeat and never interpreted here: a broken collector must not
@@ -148,7 +166,7 @@ router.all("/api/push/:pushToken", async (request, response) => {
         // only the response reflects a metrics problem.
         let metricsError = null;
         try {
-            await storeMetrics(monitor.id, bean.time, request.body?.metrics);
+            await storeMetrics(monitor.id, bean.time, request.body?.metrics, { live: telemetry });
         } catch (e) {
             metricsError = e.message;
             log.error("router", `Dropping metrics for monitor ${monitor.id}: ${e.message}`);

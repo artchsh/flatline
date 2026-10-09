@@ -105,10 +105,11 @@ Accept an optional JSON body alongside the existing query params:
 
 ### 1.4 Retention
 
-- Raw minute-resolution samples kept **30 days**, then pruned.
+- Legacy pushes retain every sample for **30 days**. Opt-in live telemetry
+  retains one snapshot per monitor per **30 seconds**, not every 1Hz sample.
 - Prune runs with the existing background-job pattern (hourly, unref'd timer).
-- At the expected scale (10 clients × 1440 samples/day) 30 days is ~430k small
-  rows — comfortable for SQLite, but the job ships with v1, not "later."
+- Ten live agents generate ~864k history rows/month at 30-second resolution,
+  versus ~25.9 million full payloads if every 1Hz sample were persisted.
 
 ---
 
@@ -129,11 +130,19 @@ Single static binary (`CGO_ENABLED=0`), linux/amd64. No runtime dependencies.
 
 ### Behaviour
 
-- Loop every 60s (flag-configurable). Jitter ±5s so ten agents do not thunder.
+- Live mode defaults to **1-second CPU/RAM samples**. Existing configs with an
+  explicit 60-second interval retain it; change `interval_seconds` to 1 to opt in.
+- CPU uses elapsed-counter deltas; no blocking one-second sleep per collection.
+  Disk and temperatures refresh every 30s, GPU every 5s, Docker every 10s in
+  independent workers. Docker events, network counters and history charts remain
+  future work. Slow collector values are cached between refreshes.
+- A capacity-one pending-sample queue drops superseded samples during a slow
+  push. One sender, bounded HTTP timeout, and capped retry backoff: never an
+  ever-growing queue of old telemetry. No ±5-second jitter on a 1Hz cadence.
 - The monitor's check interval must be at least 3× the agent interval (e.g.
   60s pushes against a 180s interval). Matching them flaps: a push landing
   seconds past the window reads as DOWN, then UP on arrival, every cycle.
-- Push failure retries with backoff, then waits for the next tick. A failed push
+- Push failure backs off and then sends the newest pending sample. A failed push
   is *not* reported as host-down locally — silence is the signal, and the
   server already turns silence into an alert.
 - Config file (`/etc/superboard/config.json`, mode 0600): server URL + push
@@ -142,6 +151,27 @@ Single static binary (`CGO_ENABLED=0`), linux/amd64. No runtime dependencies.
   starts. `superboard uninstall` removes all three. Refuses to double-install.
 - `superboard check`: one collection + one push to stdout, exit code tells you
   if the server accepted it. For provisioning and debugging without journald.
+
+### Live transport (agent 1.2+)
+
+- Live payloads add `sampleInterval`; POST `/api/push/:token?telemetry=1`
+  enables the fast path. Legacy endpoints/payloads are unchanged.
+- Healthy, non-inverted, non-maintenance hosts record a heartbeat at most every
+  `min(30s, monitor.interval / 3)`, with a 1s minimum. First beats, explicit DOWN,
+  recovery, maintenance and inverted monitors use the ordinary heartbeat path.
+  Host timeout/check intervals are **not** changed automatically.
+- Latest samples live in a bounded process-local cache (512 monitors); REST
+  falls back to indexed durable history after restart/eviction. A restart can
+  lose up to 30s of unarchived live samples. This is single-backend-process
+  architecture, not a distributed cache.
+- `/api/v1/events` streams bearer-authenticated heartbeat/metrics deltas. REST
+  snapshots run on connect, reconnect, and coalesced configuration invalidation.
+  No roster polling while connected; 30s fallback when disconnected. Token
+  revocation, expiry, scope changes and account bans are checked every 15s.
+- Freshness is separate from host reachability: live readings become stale
+  after `max(5s, sampleInterval * 3)` even when the host timeout is 180s.
+- Reverse proxies must disable SSE buffering and allow idle stream connections
+  beyond 45s. The server sends 15s keepalives and `X-Accel-Buffering: no`.
 
 ### Explicitly out of v1
 
@@ -186,8 +216,10 @@ distinct from the dense table: this is the NOC wall, not the operator desk.
 ### Layout
 
 - One card per server (one card per monitor with metrics; group monitors excluded).
-- Each card: hostname, status pill, CPU / RAM / fullest-disk bars with numbers,
-  container count with unhealthy highlighted, last-seen age.
+- Each compact card: hostname, host/workload status, CPU total + intensity-based
+  per-core squares, RAM / disk / GPU / VRAM bars, and a container name/state/
+  uptime list. Healthy readings stay neutral; real issues stand out. Exited
+  containers are not failures without an expected-running policy.
 - Bars are width + number, never colour alone — same rule as everywhere else.
 - Fullscreen-friendly: no header chrome in kiosk mode (`?kiosk=1` hides the nav),
   large type, high contrast, works at Full HD and 4K@150%.
@@ -224,17 +256,75 @@ distinct from the dense table: this is the NOC wall, not the operator desk.
   name. Name is the tie-breaker so the board never reshuffles between
   refreshes.
 - Page size is measured, not hard-coded: the board computes columns × rows from
-  its own box against a 340×220 minimum and re-measures on resize, so Full HD
+   its own box against a 340×420 minimum and actual card heights, so Full HD
   and 4K@150% both fill sensibly. `?perPage=N` overrides; `?rotate=SECONDS`
   sets the rotation interval (default 5, clamped 1–300).
 - Rotation pauses on any pointer, key or touch interaction and resumes after
   30s idle. It also pauses while the tab is hidden. With everything fitting on
   one page there is no rotation at all.
-- The first fetch always runs even if the tab is hidden at mount; only the
-  polling interval skips hidden ticks. Without that, a kiosk woken from the
-  background flashes "no servers".
-- A sample older than two intervals dims the card and shows "stale" rather than
-  silently presenting old numbers as current.
+- Snapshots run on SSE connect/reconnect; streaming changes are applied without
+  whole-roster reloads. A local 1s clock ages freshness even if the only host
+  stops sending. Stale cards retain readable numbers with an amber warning.
+- Default page capacity is at least **10 hosts**, even when a tall GPU card
+  makes the viewport measurement estimate only one row. Fleets up to ten stay
+  together; narrow screens scroll rather than auto-rotating a small fleet.
+  Explicit `perPage` query overrides remain supported for custom kiosks.
+
+### Compact container tiles
+
+- Container view uses three columns and three visible rows (nine name-only
+  tiles); container uptime is omitted. Full names, state/health and image are
+  available in tooltips. Symbols and accessible labels supplement color:
+  muted green = running/healthy (or running without a reported health check),
+  black = exited/removed with **unknown stop intent**, red = restarting/dead/
+  running-unhealthy, yellow = starting/created/paused/unknown transitions.
+- Nine or fewer containers remain static. Larger lists loop vertically and
+  seamlessly at roughly four seconds per row, without manual scrolling or
+  scrollbars on either axis. Hover/focus pauses motion; reduced-motion users
+  get a static view. Duplicate loop tiles are hidden from assistive technology.
+- Up to six failing containers are pinned, reserving at least one rotating row.
+  When more than six fail, remaining failures lead the rotating list; no
+  containers are dropped. Docker collection errors remain explicit.
+- Current agent payloads do not establish manual stop intent or exit codes.
+  Do not infer a crash from `exited`, or label a stop as definitely manual.
+
+### Planned: pending host updates (not implemented)
+
+- Future agent feature: read-only OS package-manager checks every few hours,
+  reporting only `Updated`, `Needs updating`, `Critical update needed`, or
+  `Unknown / check failed`. No package inventory in the board and no automatic
+  installation, service restart, or reboot.
+- Use OS advisory metadata for critical severity. Security updates without
+  severity metadata should be labeled security updates, not invented critical
+  advisories. Unsupported OSes, stale check results, permissions failures,
+  missing metadata, or failed refreshes must not appear as `Updated`.
+- Consider a separate pending-reboot indicator: long uptime alone does not
+  prove that a server is unpatched. Define Linux distribution/package-manager
+  support, repository-refresh permissions, freshness limits and advisory
+  classification before implementing or deploying this feature.
+
+### Server load history
+
+- Select a server name (↗) to open the keyboard-accessible history dialog.
+  Escape closes it; kiosk rotation pauses while it is open. Containers remain
+  overflow-hidden with no scrollbars.
+- Ranges: 10m, 1h, 6h, 24h, 7d. Only the open dialog refreshes history every
+  30s; live board updates continue independently. Range changes abort old reads.
+- `/api/v1/monitors/:id/metrics/summary?hours=1` extracts compact CPU/RAM/GPU/
+  VRAM scalars, at most 240 chart buckets and 50,000 source rows. This covers
+  the full 7-day window at normal 30-second archival cadence. If capped, the
+  UI explicitly warns that statistics describe a truncated window.
+- p90/p95/p99 use nearest-rank over **archived readings**, not downsampled chart
+  averages or raw 1Hz live samples. Missing GPU or invalid values are excluded,
+  not interpreted as zero. GPU/VRAM charts describe the first device. Charts
+  show bucket averages; gaps are disconnected, and coverage starts at the
+  first available archived sample.
+- Card `Peak 10m` is the highest observed **total CPU percentage** in a rolling
+  10-minute window, not the currently busiest core. A bounded, monotonic live
+  window adds no per-push history writes. After restart it warms from archived
+  snapshots, so unarchived spikes before restart cannot be reconstructed.
+  `cpuPeak10m: {percent, at} | null` is additive REST/SSE sample metadata; agent
+  payloads and existing metric rows are unchanged. No agent upgrade is needed.
 
 ---
 
@@ -259,6 +349,6 @@ distinct from the dense table: this is the NOC wall, not the operator desk.
 
 | Question | Decision |
 |---|---|
-| Retention | **30 days raw**, prune job ships with the table. Revisit only at 10x scale |
+| Retention | **30 days**, 30-second snapshots for live telemetry; every legacy sample retained |
 | Non-systemd boxes | **cron `@reboot` fallback** with a logged warning. systemd when present; never a silent half-install |
 | Kiosk param vs route | **Dedicated route.** `/superboard` (with nav) and `/superboard/kiosk` (chrome-free, memorable wall URL) |

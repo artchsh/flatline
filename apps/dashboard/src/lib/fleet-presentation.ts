@@ -1,0 +1,58 @@
+import type { MetricsPayload } from "./api";
+
+export function sampleAgeMs(time: string, now = Date.now()): number {
+    const iso = time.replace(" ", "T");
+    const timestamp = Date.parse(/(?:Z|[+-]\d{2}:?\d{2})$/i.test(iso) ? iso : `${iso}Z`);
+    return Number.isFinite(timestamp) ? Math.max(0, now - timestamp) : Infinity;
+}
+
+export function percentage(value: number | undefined): string {
+    return value === undefined || !Number.isFinite(value)
+        ? "—"
+        : `${Math.max(0, Math.min(100, value)).toFixed(value < 10 ? 1 : 0)}%`;
+}
+
+type Container = NonNullable<MetricsPayload["docker"]>[number];
+export type FleetContainer = Container;
+
+export function containerTone(container: Container): "up" | "stopped" | "bad" | "pending" {
+    if (containerIssue(container)) { return "bad"; }
+    if (container.state === "exited" || container.state === "removed") { return "stopped"; }
+    if (container.state === "running" && (!container.health || container.health === "healthy")) { return "up"; }
+    return "pending";
+}
+
+export function containerTileLayout(containers: Container[]) {
+    // Reserve at least one rotating row when the fleet overflows. More than
+    // six issues cannot all be pinned: remaining issues lead the rotating set.
+    const issues = containers.filter(containerIssue);
+    const pinned = containers.length > 9 ? issues.slice(0, 6) : [];
+    const pinnedSet = new Set(pinned);
+    const rotating = containers.filter(container => !pinnedSet.has(container));
+    const pinnedRows = Math.ceil(pinned.length / 3);
+    const visibleRows = 3 - pinnedRows;
+    const rows: Container[][] = [];
+    for (let i = 0; i < rotating.length; i += 3) { rows.push(rotating.slice(i, i + 3)); }
+    return { pinned, rows, visibleRows, looping: rows.length > visibleRows };
+}
+
+// Stopped containers may be intentional. Only explicit malfunction states
+// count as issues until expected-running configuration exists.
+export function containerIssue(container: Container): boolean {
+    return container.state === "dead" || container.state === "restarting" ||
+        (container.state === "running" && container.health === "unhealthy");
+}
+
+export function fleetAttention(metrics: MetricsPayload, time: string, interval: number, now = Date.now()) {
+    const freshnessWindow = metrics.sampleInterval && Number.isFinite(metrics.sampleInterval) && metrics.sampleInterval > 0
+        ? Math.max(5, metrics.sampleInterval * 3) : Math.max(60, interval);
+    const stale = sampleAgeMs(time, now) > freshnessWindow * 1000;
+    const containers = [...(metrics.docker ?? [])].sort((a, b) =>
+        Number(containerIssue(b)) - Number(containerIssue(a)) || (a.name ?? "").localeCompare(b.name ?? ""));
+    const issues = containers.filter(containerIssue).length + Number(Boolean(metrics.dockerError));
+    const hot = [metrics.cpu?.percent, metrics.mem?.percent, ...(metrics.disk ?? []).map(d => d.percent),
+        ...(metrics.gpu?.gpus ?? [metrics.gpu]).flatMap(g => [g?.util,
+            g?.memTotal && g.memUsed !== undefined ? g.memUsed / g.memTotal * 100 : undefined])]
+        .some(value => value !== undefined && Number.isFinite(value) && value >= 90);
+    return { stale, containers, issues, hot };
+}

@@ -1,0 +1,38 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+import { containerIssue, fleetAttention, percentage, sampleAgeMs } from "../src/lib/fleet-presentation.ts";
+
+const now = Date.parse("2026-10-09T12:00:00Z");
+test("freshness accepts SQL, UTC and offset timestamps; invalid data is stale", () => {
+    for (const time of ["2026-10-09 11:59:00", "2026-10-09T11:59:00Z", "2026-10-09T13:59:00+02:00"]) {
+        assert.equal(sampleAgeMs(time, now), 60_000);
+    }
+    assert.equal(sampleAgeMs("bad", now), Infinity);
+    assert.equal(fleetAttention({}, "bad", 180, now).stale, true);
+    assert.equal(fleetAttention({}, "2026-10-09 11:58:00", 180, now).stale, false);
+    assert.equal(fleetAttention({}, "2026-10-09 11:56:59", 180, now).stale, true);
+    assert.equal(fleetAttention({sampleInterval:1}, "2026-10-09 11:59:54", 180, now).stale, true);
+    assert.equal(fleetAttention({sampleInterval:1}, "2026-10-09 11:59:56", 180, now).stale, false);
+});
+test("intentional stopped states and starting health are not failures", () => {
+    for (const c of [{state:"exited", health:"unhealthy"}, {state:"created"}, {state:"paused"}, {state:"running", health:"starting"}]) {
+        assert.equal(containerIssue(c), false);
+    }
+    for (const c of [{state:"running", health:"unhealthy"}, {state:"dead"}, {state:"restarting"}]) {
+        assert.equal(containerIssue(c), true);
+    }
+});
+test("issues sort first without mutating the payload; collection failures are visible", () => {
+    const docker = [{name:"a", state:"exited"}, {name:"b", state:"restarting"}];
+    const state = fleetAttention({docker, dockerError:"socket inaccessible"}, "2026-10-09T12:00:00Z", 180, now);
+    assert.equal(state.issues, 2);
+    assert.equal(state.containers[0].name, "b");
+    assert.equal(docker[0].name, "a");
+});
+test("high usage includes memory, disks and legacy GPU VRAM; unknown numbers stay unknown", () => {
+    assert.equal(fleetAttention({gpu:{available:true, memTotal:100, memUsed:95}}, "2026-10-09T12:00:00Z", 180, now).hot, true);
+    assert.equal(fleetAttention({cpu:{percent:NaN}, mem:{percent:3}}, "2026-10-09T12:00:00Z", 180, now).hot, false);
+    for (const v of [undefined, NaN, Infinity]) { assert.equal(percentage(v), "—"); }
+    assert.equal(percentage(0.1), "0.1%");
+    assert.equal(percentage(110), "100%");
+});

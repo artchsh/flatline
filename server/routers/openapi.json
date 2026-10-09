@@ -274,6 +274,36 @@
         }
     ],
     "paths": {
+        "/api/v1/monitors/{id}/metrics/summary": {
+            "get": {
+                "summary": "Load history charts and percentile statistics",
+                "description": "Requires read scope. Extracts only CPU/RAM/first-GPU/first-VRAM scalars. Percentiles use nearest-rank across archived samples (normally 30s), not chart bucket averages or raw 1Hz telemetry. Returns at most 240 chart buckets, stats with count/min/max/mean/p90/p95/p99, coverage timestamps, and capped=true if the newest 50,000-row safety limit truncates the window. GPU/VRAM are null when unavailable. No data is represented as missing, not zero.",
+                "parameters": [
+                    { "$ref": "#/components/parameters/monitorId" },
+                    { "name": "hours", "in": "query", "schema": { "type": "number", "exclusiveMinimum": 0, "maximum": 168, "default": 1 } }
+                ],
+                "responses": {
+                    "200": { "description": "Window, coverage, percentile statistics, and bucket-average chart series" },
+                    "400": { "$ref": "#/components/responses/BadRequest" },
+                    "401": { "$ref": "#/components/responses/Unauthorized" },
+                    "404": { "description": "No such monitor" }
+                }
+            }
+        },
+        "/api/v1/events": {
+            "get": {
+                "summary": "Live monitor and telemetry changes",
+                "description": "Requires read scope and Authorization header (never a URL token). SSE JSON data frames: ready, heartbeat {monitorId,patch}, metrics {monitorId,time,metrics}, invalidate, unauthorized. On ready/invalidate, resnapshot REST before applying buffered deltas. No replay log. Keepalive every 15s; credentials revalidated every 15s; reconnect after 15 minutes. Bounded to 8 streams/key, 128 total, and 256KiB pending output per stream.",
+                "security": [{ "bearerAuth": [] }],
+                "parameters": [{ "name": "metrics", "in": "query", "schema": { "type": "string", "enum": ["0", "1"], "default": "1" }, "description": "0 suppresses telemetry for ordinary monitor dashboards." }],
+                "responses": {
+                    "200": { "description": "Live event stream", "content": { "text/event-stream": { "schema": { "type": "string" } } } },
+                    "401": { "description": "Invalid/missing token or banned account" },
+                    "403": { "description": "Missing read scope" },
+                    "429": { "description": "Connection or API rate limit" }
+                }
+            }
+        },
         "/api/v1": {
             "get": {
                 "summary": "API index",

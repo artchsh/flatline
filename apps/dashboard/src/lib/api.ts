@@ -6,7 +6,7 @@
  * token shape an agent uses, which keeps one auth model instead of two.
  */
 
-const BASE = (import.meta.env.VITE_FLATLINE_URL as string | undefined) ?? "";
+const BASE = (import.meta.env?.VITE_FLATLINE_URL as string | undefined) ?? "";
 
 const TOKEN_KEY = "flatline.token";
 
@@ -158,6 +158,120 @@ export function fetchMonitors(params: { status?: string; q?: string; page?: numb
     return request(`/api/v1/monitors${suffix}`);
 }
 
+/** Roster snapshots are infrequent; never silently truncate a larger fleet. */
+export async function fetchAllMonitors(): Promise<MonitorSummary[]> {
+    const monitors: MonitorSummary[] = [];
+    for (let page = 1; ; page++) {
+        const result = await fetchMonitors({ page, perPage: 200 });
+        monitors.push(...result.monitors);
+        if (!result.pagination.hasMore) { return monitors; }
+    }
+}
+
+export type LiveEvent =
+    | { type: "metrics"; monitorId: number; time: string; metrics: MetricsPayload; cpuPeak10m?: CPUPeak | null }
+    | { type: "heartbeat"; monitorId: number; patch: Partial<MonitorSummary> };
+
+/** Fetch-based SSE keeps credentials in Authorization, never URLs/cookies.
+ * Reconnect resnapshots before applying buffered deltas, closing the race
+ * between a REST snapshot and updates that arrive while it is loading.
+ */
+export function watchLive(options: {
+    metrics?: boolean;
+    snapshot: () => Promise<void>;
+    event: (event: LiveEvent) => void;
+    error: (error: Error) => void;
+}): () => void {
+    let stopped = false;
+    let controller: AbortController | null = null;
+    let retry: ReturnType<typeof setTimeout> | undefined;
+    let delay = 1000;
+    let connected = false;
+    let generation = 0;
+    async function connect() {
+        if (stopped) { return; }
+        const epoch = ++generation;
+        controller = new AbortController();
+        const currentController = controller;
+        let watchdog = setTimeout(() => currentController.abort(), 45_000);
+        try {
+            const token = getToken();
+            const response = await fetch(`${BASE}/api/v1/events${options.metrics === false ? "?metrics=0" : ""}`, {
+                headers: { Accept: "text/event-stream", ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+                signal: controller.signal,
+            });
+            if (!response.ok) { throw new ApiError(response.status, "live_stream", response.statusText); }
+            if (!response.body || !response.headers.get("content-type")?.includes("text/event-stream")) {
+                throw new Error("Live stream unavailable");
+            }
+            connected = true;
+            const reader = response.body.getReader();
+            const decoder = new TextDecoder();
+            let buffer = "";
+            try {
+                while (!stopped && epoch === generation) {
+                    const chunk = await reader.read();
+                    clearTimeout(watchdog);
+                    watchdog = setTimeout(() => currentController.abort(), 45_000);
+                    if (chunk.done) { throw new Error("Live connection closed; reconnecting"); }
+                    buffer += decoder.decode(chunk.value, { stream: true }).replace(/\r/g, "");
+                    if (buffer.length > 1024 * 1024) { throw new Error("Live frame exceeds limit"); }
+                    let boundary;
+                    while ((boundary = buffer.indexOf("\n\n")) >= 0) {
+                        if (stopped || epoch !== generation) { break; }
+                        const frame = buffer.slice(0, boundary);
+                        buffer = buffer.slice(boundary + 2);
+                        const data = frame.split("\n").filter(line => line.startsWith("data:")).map(line => line.slice(5).trimStart()).join("\n");
+                        if (!data) { continue; }
+                        const event = JSON.parse(data);
+                        if (event.type === "unauthorized") { throw new ApiError(401, "unauthorized", "Live token expired or revoked"); }
+                        if (event.type === "ready" || event.type === "invalidate") {
+                            await options.snapshot();
+                            delay = 1000;
+                        } else if ((event.type === "metrics" || event.type === "heartbeat") && !stopped && epoch === generation) {
+                            options.event(event);
+                        }
+                    }
+                }
+            } finally {
+                await reader.cancel().catch(() => {});
+                reader.releaseLock();
+            }
+        } catch (error) {
+            if (stopped || epoch !== generation) { return; }
+            connected = false;
+            const failure = error instanceof Error ? error : new Error("Live stream disconnected");
+            options.error(failure);
+            if (failure instanceof ApiError && (failure.status === 401 || failure.status === 403)) {
+                stopped = true;
+                clearInterval(fallback);
+                return;
+            }
+            try { await options.snapshot(); } catch { /* reconnect retries the snapshot */ }
+            if (stopped || epoch !== generation) { return; }
+            retry = setTimeout(() => void connect(), delay + Math.random() * 500);
+            delay = Math.min(15_000, delay * 2);
+        } finally {
+            clearTimeout(watchdog);
+        }
+    }
+    // Compatibility fallback while a proxy/server cannot stream. Never poll
+    // whole rosters while the live connection is healthy.
+    const fallback = setInterval(() => {
+        if (!stopped && !connected && !document.hidden) {
+            void options.snapshot().catch(error => options.error(error));
+        }
+    }, 30_000);
+    void connect();
+    return () => {
+        stopped = true;
+        generation++;
+        controller?.abort();
+        clearTimeout(retry);
+        clearInterval(fallback);
+    };
+}
+
 /**
  * Pause a monitor.
  * @param id Monitor id
@@ -254,6 +368,7 @@ export function deleteMonitor(id: number, deleteChildren = false): Promise<{ ok:
  */
 export interface MetricsPayload {
     v?: number;
+    sampleInterval?: number;
     host?: { hostname?: string; os?: string; uptime?: number };
     cpu?: { percent?: number; cores?: number; perCore?: number[]; temp?: number };
     mem?: { total?: number; used?: number; percent?: number; temp?: number };
@@ -276,6 +391,22 @@ export interface LatestMetrics {
     monitorId: number;
     time: string;
     metrics: MetricsPayload;
+    cpuPeak10m?: CPUPeak | null;
+}
+
+export interface CPUPeak { percent: number; at: string }
+export type HistoryMetric = "cpu" | "ram" | "gpu" | "vram";
+export interface HistoryStats { count: number; min: number; max: number; mean: number; p90: number; p95: number; p99: number }
+export interface HistoryPoint { time: string; cpu: number | null; ram: number | null; gpu: number | null; vram: number | null }
+export interface MetricsHistorySummary {
+    ok: true; monitorId: number; hours: number; from: string; to: string;
+    capped: boolean; samples: number; firstSample: string | null; lastSample: string | null;
+    bucketSeconds: number; percentileMethod: string; basis: string;
+    stats: Record<HistoryMetric, HistoryStats | null>; series: HistoryPoint[];
+}
+
+export function fetchMetricsHistory(id: number, hours: number, signal?: AbortSignal): Promise<MetricsHistorySummary> {
+    return request(`/api/v1/monitors/${id}/metrics/summary?hours=${hours}`, { signal });
 }
 
 /**
@@ -289,7 +420,7 @@ export interface LatestMetrics {
 export function fetchLatestMetricsBulk(ids: number[]): Promise<{
     ok: true;
     count: number;
-    samples: Record<number, { time: string; metrics: MetricsPayload } | null>;
+    samples: Record<number, { time: string; metrics: MetricsPayload; cpuPeak10m?: CPUPeak | null } | null>;
 }> {
     return request(`/api/v1/monitors/metrics/latest?ids=${ids.join(",")}`);
 }

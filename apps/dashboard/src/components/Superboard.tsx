@@ -2,7 +2,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
     ApiError,
     fetchLatestMetricsBulk,
-    fetchMonitors,
+    fetchAllMonitors,
+    watchLive,
     getToken,
     setToken,
     type MonitorSummary,
@@ -12,17 +13,17 @@ import { TokenGate } from "@/components/TokenGate";
 import { FleetCard, type FleetServer } from "@/components/FleetCard";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { fleetAttention } from "@/lib/fleet-presentation";
+import { fleetPageSize } from "@/lib/fleet-layout";
+import { ServerHistory } from "@/components/ServerHistory";
 
 /** Minimum card footprint used to work out how many fit on the wall. */
 const MIN_CARD_W = 340;
-const MIN_CARD_H = 220;
+const MIN_CARD_H = 420;
 const GAP = 16;
 
 /** How long the board stays paused after someone touches it. */
 const IDLE_RESUME_MS = 30_000;
-
-/** How often the numbers are refetched. */
-const REFRESH_MS = 5_000;
 
 /**
  * Parse an integer query parameter, clamped to a range.
@@ -54,13 +55,16 @@ async function toFleetServers(monitors: MonitorSummary[]): Promise<FleetServer[]
         return [];
     }
 
-    const res = await fetchLatestMetricsBulk(monitors.map((m) => m.id));
+    const samples = {} as Record<number, { time: string; metrics: FleetServer["metrics"]; cpuPeak10m?: FleetServer["cpuPeak10m"] } | null>;
+    const batches = Array.from({ length: Math.ceil(monitors.length / 200) }, (_, index) =>
+        fetchLatestMetricsBulk(monitors.slice(index * 200, (index + 1) * 200).map(m => m.id)));
+    for (const batch of await Promise.all(batches)) { Object.assign(samples, batch.samples); }
     const out: FleetServer[] = [];
 
     for (const monitor of monitors) {
-        const sample = res.samples[monitor.id];
+        const sample = samples[monitor.id];
         if (sample) {
-            out.push({ monitor, time: sample.time, metrics: sample.metrics });
+            out.push({ monitor, time: sample.time, metrics: sample.metrics, cpuPeak10m: sample.cpuPeak10m });
         }
     }
 
@@ -100,6 +104,19 @@ function Superboard({ kiosk, onDisconnect }: { kiosk: boolean; onDisconnect: () 
     const [paused, setPaused] = useState(false);
     const [layout, setLayout] = useState({ cols: 3, rows: 2 });
     const [visible, setVisible] = useState(() => !document.hidden);
+    const [now, refreshFreshness] = useState(Date.now);
+    const [historyId, setHistoryId] = useState<number | null>(null);
+    const openHistory = useCallback((id: number) => setHistoryId(id), []);
+    const closeHistory = useCallback(() => setHistoryId(null), []);
+    const historyMonitor = servers.find(server => server.monitor.id === historyId)?.monitor;
+
+    // Freshness must age even when the last/only host stops sending.
+    useEffect(() => {
+        const timer = window.setInterval(() => {
+            if (!document.hidden) { refreshFreshness(Date.now()); }
+        }, 1000);
+        return () => window.clearInterval(timer);
+    }, []);
 
     const gridRef = useRef<HTMLDivElement>(null);
     const resumeTimer = useRef<number | undefined>(undefined);
@@ -113,37 +130,33 @@ function Superboard({ kiosk, onDisconnect }: { kiosk: boolean; onDisconnect: () 
 
     useEffect(() => {
         let alive = true;
+        let roster = new Map<number, MonitorSummary>();
+        const order = (a: FleetServer, b: FleetServer) =>
+            (roster.get(a.monitor.parent ?? -1)?.weight ?? 0) - (roster.get(b.monitor.parent ?? -1)?.weight ?? 0) ||
+            (a.monitor.weight ?? 0) - (b.monitor.weight ?? 0) || a.monitor.name.localeCompare(b.monitor.name);
 
         async function load() {
             try {
-                const roster = await fetchMonitors({ perPage: 200 });
+                const monitors = await fetchAllMonitors();
+                roster = new Map(monitors.map(m => [m.id, m]));
 
                 // Groups are containers, not servers; anything else that has
                 // recent metrics is one. Zero configuration, and a server that
                 // stops pushing ages out of the board on its own. One bulk
                 // request, not one per monitor, so the board sips the rate
                 // budget instead of drinking it.
-                const candidates = roster.monitors.filter((m) => m.type !== "group" && m.active !== false);
+                const candidates = monitors.filter((m) => m.type !== "group" && m.active !== false);
                 const next = await toFleetServers(candidates);
 
                 if (!alive) {
                     return;
                 }
 
-                const weights = new Map(roster.monitors.map((m) => [ m.id, m ]));
 
                 // Operator-controlled order: parent group weight, then the
                 // monitor's own weight, then name. Ties fall back to name so
                 // the board never reshuffles between refreshes.
-                next.sort((a, b) => {
-                    const aw = weights.get(a.monitor.parent ?? -1)?.weight ?? 0;
-                    const bw = weights.get(b.monitor.parent ?? -1)?.weight ?? 0;
-                    return (
-                        aw - bw ||
-                        (a.monitor.weight ?? 0) - (b.monitor.weight ?? 0) ||
-                        a.monitor.name.localeCompare(b.monitor.name)
-                    );
-                });
+                next.sort(order);
 
                 setServers(next);
                 setError(null);
@@ -156,6 +169,7 @@ function Superboard({ kiosk, onDisconnect }: { kiosk: boolean; onDisconnect: () 
                     return;
                 }
                 setError(e instanceof Error ? e.message : "Could not load the board.");
+                throw e;
             } finally {
                 if (alive) {
                     setLoaded(true);
@@ -167,15 +181,32 @@ function Superboard({ kiosk, onDisconnect }: { kiosk: boolean; onDisconnect: () 
         // wakes up foregrounded must never flash "no servers" because the
         // first fetch was cancelled by a visibility change. The interval,
         // however, skips hidden ticks — no point polling a board nobody sees.
-        void load();
-        const timer = window.setInterval(() => {
-            if (!document.hidden) {
-                void load();
-            }
-        }, REFRESH_MS);
+        const stop = watchLive({
+            snapshot: load,
+            event: event => {
+                if (!alive) { return; }
+                const monitor = roster.get(event.monitorId);
+                if (event.type === "heartbeat" && monitor) { roster.set(event.monitorId, { ...monitor, ...event.patch }); }
+                setServers(previous => {
+                    if (event.type === "metrics" && !previous.some(s => s.monitor.id === event.monitorId) && monitor?.active && monitor.type !== "group") {
+                        return [...previous, { monitor, time: event.time, metrics: event.metrics, cpuPeak10m: event.cpuPeak10m }].sort(order);
+                    }
+                    return previous.map(server => server.monitor.id !== event.monitorId ? server :
+                        event.type === "metrics" ? { ...server, time: event.time, metrics: event.metrics, cpuPeak10m: event.cpuPeak10m } :
+                            { ...server, monitor: { ...server.monitor, ...event.patch } });
+                });
+                setError(null);
+            },
+            error: error => {
+                if (!alive) { return; }
+                if (error instanceof ApiError && (error.status === 401 || error.status === 403)) { onDisconnect(); return; }
+                setError("Live updates disconnected; reconnecting. Last readings remain visible.");
+                // A metrics-free/new host is discovered on reconnect snapshot.
+            },
+        });
         return () => {
             alive = false;
-            window.clearInterval(timer);
+            stop();
         };
     }, [ onDisconnect ]);
 
@@ -196,17 +227,24 @@ function Superboard({ kiosk, onDisconnect }: { kiosk: boolean; onDisconnect: () 
 
         const measure = () => {
             const cols = Math.max(1, Math.floor((el.clientWidth + GAP) / (MIN_CARD_W + GAP)));
-            const rows = Math.max(1, Math.floor((el.clientHeight + GAP) / (MIN_CARD_H + GAP)));
+            // Content-sized cards can be taller with GPUs or long names.
+            // Measure them rather than packing rows against an assumed height.
+            const cardHeight = Math.max(MIN_CARD_H, ...Array.from(el.children)
+                .map(card => card.getBoundingClientRect().height));
+            const rows = Math.max(1, Math.floor((el.clientHeight + GAP) / (cardHeight + GAP)));
             setLayout((prev) => (prev.cols === cols && prev.rows === rows ? prev : { cols, rows }));
         };
 
         measure();
         const observer = new ResizeObserver(measure);
         observer.observe(el);
+        Array.from(el.children).forEach(card => observer.observe(card));
         return () => observer.disconnect();
-    }, []);
+    }, [servers.length]);
 
-    const perPage = overridePerPage ?? layout.cols * layout.rows;
+    // A tall GPU card must not force eight hosts onto rotating single rows.
+    // Pack at least ten per page; CSS uses additional rows/scrolling as needed.
+    const perPage = fleetPageSize(layout.cols, layout.rows, overridePerPage);
     const pageCount = Math.max(1, Math.ceil(servers.length / perPage));
     const pageServers = servers.slice(page * perPage, page * perPage + perPage);
 
@@ -220,12 +258,12 @@ function Superboard({ kiosk, onDisconnect }: { kiosk: boolean; onDisconnect: () 
     // -- rotation -----------------------------------------------------------
 
     useEffect(() => {
-        if (paused || !visible || pageCount <= 1) {
+        if (paused || !visible || pageCount <= 1 || historyId !== null) {
             return;
         }
         const timer = window.setInterval(() => setPage((p) => (p + 1) % pageCount), rotateMs);
         return () => window.clearInterval(timer);
-    }, [ paused, visible, pageCount, rotateMs ]);
+    }, [ paused, visible, pageCount, rotateMs, historyId ]);
 
     /** Any interaction pauses rotation for a while, so investigation is possible. */
     function noteInteraction() {
@@ -237,6 +275,10 @@ function Superboard({ kiosk, onDisconnect }: { kiosk: boolean; onDisconnect: () 
     useEffect(() => () => window.clearTimeout(resumeTimer.current), []);
 
     const down = servers.filter((s) => s.monitor.status === 0).length;
+    const attentionCount = servers.filter(s => {
+        const state = fleetAttention(s.metrics, s.time, s.monitor.interval || 60);
+        return s.monitor.status === 0 || s.monitor.status === 2 || state.stale || state.issues > 0 || state.hot;
+    }).length;
     const rotated = pageCount > 1;
 
     const position = (
@@ -259,21 +301,21 @@ function Superboard({ kiosk, onDisconnect }: { kiosk: boolean; onDisconnect: () 
     ) : (
         <div
             ref={gridRef}
-            className="grid min-h-0 flex-1 gap-4"
+            className="fleet-grid grid min-h-0 flex-1 items-start content-start gap-4 overflow-y-auto"
             style={{
                 gridTemplateColumns: `repeat(${layout.cols}, minmax(0, 1fr))`,
-                gridAutoRows: "minmax(0, 1fr)",
             }}
         >
             {pageServers.map((server) => (
-                <FleetCard key={server.monitor.id} server={server} />
+                <FleetCard key={server.monitor.id} server={server} now={now} onOpenHistory={openHistory} />
             ))}
         </div>
     );
 
     const body = (
         <div
-            className="flex h-full min-h-0 flex-col"
+            className="superboard flex h-full min-h-0 flex-col"
+            data-kiosk={kiosk || undefined}
             onPointerDown={noteInteraction}
             onKeyDown={noteInteraction}
             onTouchStart={noteInteraction}
@@ -290,9 +332,9 @@ function Superboard({ kiosk, onDisconnect }: { kiosk: boolean; onDisconnect: () 
                                 {down} down
                             </Badge>
                         ) : (
-                            <Badge tone="up">
+                            <Badge tone={attentionCount > 0 ? "degraded" : "neutral"}>
                                 <span className="size-1.5 rounded-full bg-current" />
-                                All up
+                                {attentionCount > 0 ? `${attentionCount} need attention` : "All hosts up"}
                             </Badge>
                         )}
                         {position}
@@ -310,7 +352,7 @@ function Superboard({ kiosk, onDisconnect }: { kiosk: boolean; onDisconnect: () 
                     </button>
                     <span className="text-sm text-quiet">Superboard</span>
                     <span className="text-xs text-quiet">
-                        <span className="tnum">{servers.length}</span> servers
+                        <span className="tnum">{servers.length}</span> {servers.length === 1 ? "server" : "servers"}
                         {down > 0 ? <span className="ml-1 font-semibold text-bad">· {down} down</span> : null}
                     </span>
                     <div className="ml-auto flex items-center gap-3">
@@ -332,6 +374,7 @@ function Superboard({ kiosk, onDisconnect }: { kiosk: boolean; onDisconnect: () 
             ) : null}
 
             <div className={`flex min-h-0 flex-1 flex-col p-4 ${kiosk ? "pt-0" : ""}`}>{content}</div>
+            {historyMonitor ? <ServerHistory monitor={historyMonitor} onClose={closeHistory} /> : null}
         </div>
     );
 

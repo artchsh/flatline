@@ -98,12 +98,13 @@ type Container struct {
 // Payload is the full document POSTed as `metrics` to /api/push/:token.
 // Unknown fields are ignored server-side, so additions are safe.
 type Payload struct {
-	V           int         `json:"v"`
-	Host        Host        `json:"host"`
-	CPU         CPU         `json:"cpu"`
-	Mem         Mem         `json:"mem"`
-	Disk        []Disk      `json:"disk"`
-	GPU         GPU         `json:"gpu"`
-	Docker      []Container `json:"docker"`
-	DockerError string      `json:"dockerError,omitempty"`
+	V              int         `json:"v"`
+	SampleInterval int         `json:"sampleInterval,omitempty"`
+	Host           Host        `json:"host"`
+	CPU            CPU         `json:"cpu"`
+	Mem            Mem         `json:"mem"`
+	Disk           []Disk      `json:"disk"`
+	GPU            GPU         `json:"gpu"`
+	Docker         []Container `json:"docker"`
+	DockerError    string      `json:"dockerError,omitempty"`
 }

@@ -1,9 +1,9 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
     ApiError,
     deleteMonitor,
-    fetchHealth,
-    fetchMonitors,
+    fetchAllMonitors,
+    watchLive,
     getToken,
     pauseMonitor,
     resumeMonitor,
@@ -21,6 +21,7 @@ import { inviteTokenFrom, navigate, usePath } from "@/lib/router";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { healthFromMonitors } from "@/lib/live-state";
 
 /**
  * Map a numeric monitor status onto a label and a badge tone.
@@ -431,8 +432,10 @@ function GroupedTable({
  */
 function Dashboard({ inviteToken }: { inviteToken: string | null }) {
     const [authed, setAuthed] = useState(() => Boolean(getToken()));
-    const [health, setHealth] = useState<HealthSummary | null>(null);
     const [monitors, setMonitors] = useState<MonitorSummary[]>([]);
+    const [rosterLoaded, setRosterLoaded] = useState(false);
+    const health = useMemo(() => rosterLoaded ? healthFromMonitors(monitors) : null, [monitors, rosterLoaded]);
+    const loadEpoch = useRef(0);
     const [selected, setSelected] = useState<Set<number>>(new Set());
     const [query, setQuery] = useState("");
     const [error, setError] = useState<string | null>(null);
@@ -446,33 +449,49 @@ function Dashboard({ inviteToken }: { inviteToken: string | null }) {
     const [agentsOpen, setAgentsOpen] = useState(false);
     const [usersOpen, setUsersOpen] = useState(false);
 
-    async function load() {
+    const load = useCallback(async (strict = false) => {
+        const epoch = ++loadEpoch.current;
         try {
-            const [ h, m ] = await Promise.all([ fetchHealth(), fetchMonitors({ perPage: 200 }) ]);
-            setHealth(h.health);
-            setMonitors(m.monitors);
+            const next = await fetchAllMonitors();
+            if (epoch !== loadEpoch.current) { return; }
+            setMonitors(next);
+            setRosterLoaded(true);
             setError(null);
         } catch (e) {
+            if (epoch !== loadEpoch.current) { return; }
             if (e instanceof ApiError && e.status === 401) {
                 setToken(null);
                 setAuthed(false);
                 return;
             }
             setError(e instanceof Error ? e.message : "Failed to load.");
+            if (strict) { throw e; }
         }
-    }
+    }, []);
 
-    // Refresh on mount and every 15s. The dashboard is a passive view, so a
-    // short poll is simpler than holding a socket open for every operator.
+    // Initial/reconnect snapshot, then only committed heartbeat deltas.
     useEffect(() => {
         if (!authed) {
             return;
         }
 
-        void load();
-        const timer = window.setInterval(() => void load(), 15000);
-        return () => window.clearInterval(timer);
-    }, [ authed ]);
+        const stop = watchLive({
+            metrics: false,
+            snapshot: () => load(true),
+            event: event => {
+                if (event.type !== "heartbeat") { return; }
+                setMonitors(previous => previous.map(monitor => monitor.id === event.monitorId ? { ...monitor, ...event.patch } : monitor));
+                setError(null);
+            },
+            error: error => {
+                if (error instanceof ApiError && (error.status === 401 || error.status === 403)) {
+                    setToken(null); setAuthed(false); return;
+                }
+                setError("Live updates disconnected; reconnecting.");
+            },
+        });
+        return () => { loadEpoch.current++; stop(); };
+    }, [ authed, load ]);
 
     // "/" focuses search, escape clears it and any selection.
     useEffect(() => {

@@ -20,7 +20,7 @@ import (
 	"os"
 )
 
-const version = "1.1.0"
+const version = "1.2.0"
 
 func usage() {
 	fmt.Fprintf(os.Stderr, `superboard %s — Flatline fleet agent
@@ -57,7 +57,7 @@ func main() {
 	configPath := fs.String("config", DefaultConfigPath, "path to config.json")
 	server := fs.String("server", "", "Flatline origin, e.g. https://uptime.mediaboost.kz")
 	token := fs.String("token", "", "monitor push token")
-	interval := fs.Int("interval", 0, "seconds between pushes (default 60)")
+	interval := fs.Int("interval", 0, "seconds between live samples (default 1)")
 	insecure := fs.Bool("insecure", false, "allow plain HTTP (not recommended)")
 	verbose := fs.Bool("verbose", false, "print the collected payload on check")
 

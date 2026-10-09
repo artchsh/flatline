@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { fetchMonitor, type MonitorSummary } from "@/lib/api";
+import { fetchMonitor, watchLive, type MonitorSummary } from "@/lib/api";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 
@@ -189,11 +189,22 @@ export function MonitorDetail({
             }
         }
 
-        void load();
-        const timer = window.setInterval(() => void load(), 30000);
+        const stop = watchLive({
+            metrics: false,
+            snapshot: load,
+            event: event => {
+                if (!cancelled && event.type === "heartbeat" && event.monitorId === id) {
+                    setMonitor(previous => previous ? { ...previous, ...event.patch } : previous);
+                    void load();
+                }
+            },
+            error: () => {
+                if (!cancelled) { setError("Live updates disconnected; reconnecting."); }
+            },
+        });
         return () => {
             cancelled = true;
-            window.clearInterval(timer);
+            stop();
         };
     }, [ id ]);
 

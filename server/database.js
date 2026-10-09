@@ -430,6 +430,8 @@ class Database {
         const knexInstance = knex(config);
 
         R.setup(knexInstance);
+        // A database reconnect/switch must never reuse another DB's live rows.
+        require("./monitor-metrics").resetMetricsCache();
 
         if (process.env.SQL_LOG === "1") {
             R.debug(true);

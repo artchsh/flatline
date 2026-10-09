@@ -93,6 +93,11 @@ async function resolveAPIKey(key) {
         return null;
     }
 
+    const owner = await R.findOne("better_auth_user", " id = ? ", [hash.user_id]);
+    if (!owner || owner.banned) {
+        return null;
+    }
+
     return hash;
 }
 

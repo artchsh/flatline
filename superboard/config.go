@@ -17,8 +17,8 @@ type Config struct {
 	// it must be 0600, and rotation is one server-side regenerate plus one
 	// line changed here.
 	PushToken string `json:"push_token"`
-	// IntervalSeconds between pushes. Matches the monitor's check interval;
-	// silence past interval + buffer reads as host-down server-side.
+	// IntervalSeconds between live samples. Keep the monitor timeout at least
+	// three times this interval, independently of telemetry refresh cadence.
 	IntervalSeconds int `json:"interval_seconds,omitempty"`
 	// AllowInsecure permits plain HTTP. The agent refuses it by default
 	// because metrics (hostnames, container names, versions) are genuinely
@@ -26,8 +26,8 @@ type Config struct {
 	AllowInsecure bool `json:"allow_insecure,omitempty"`
 }
 
-// DefaultIntervalSeconds matches the usual monitor check cadence.
-const DefaultIntervalSeconds = 60
+// Fast live telemetry; existing explicitly configured intervals are preserved.
+const DefaultIntervalSeconds = 1
 
 // DefaultConfigPath is where `install` writes and `run` reads.
 const DefaultConfigPath = "/etc/superboard/config.json"

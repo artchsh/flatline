@@ -15,6 +15,7 @@ const { R } = require("redbean-node");
 const { log } = require("../src/util");
 const Monitor = require("./model/monitor");
 const { UptimeKumaServer } = require("./uptime-kuma-server");
+const { publish } = require("./live-updates");
 
 /**
  * Frontend-only properties that must never reach the database.
@@ -213,6 +214,7 @@ async function createMonitor(userID, payload, options = {}) {
     }
 
     log.info("monitor", `Added Monitor: ${bean.id} Created by User ID: ${userID}`);
+    publish({ type: "invalidate" });
 
     if (start && bean.active !== false) {
         await startMonitor(bean.id);
@@ -297,6 +299,7 @@ async function updateMonitor(monitorID, payload, options = {}) {
     }
 
     log.info("monitor", `Edited Monitor: ${bean.id}`);
+    publish({ type: "invalidate" });
 
     // Pick up new config immediately; otherwise the old loop keeps running
     // with stale settings until the next restart.
@@ -333,6 +336,8 @@ async function deleteMonitor(monitorID, deleteChildren = false) {
     }
 
     await Monitor.deleteMonitor(monitorID);
+    require("./monitor-metrics").forgetMetrics(monitorID);
+    publish({ type: "invalidate" });
     deleted.push(monitorID);
 
     log.info("manage", `Delete Monitor: ${monitorID}`);
@@ -353,6 +358,7 @@ async function startMonitor(monitorID) {
     }
 
     await R.exec("UPDATE monitor SET active = 1 WHERE id = ? ", [ monitorID ]);
+    publish({ type: "invalidate" });
 
     const server = UptimeKumaServer.getInstance();
     if (monitor.id in server.monitorList) {
@@ -381,6 +387,7 @@ async function restartMonitor(monitorID) {
  */
 async function pauseMonitor(monitorID) {
     await R.exec("UPDATE monitor SET active = 0 WHERE id = ? ", [ monitorID ]);
+    publish({ type: "invalidate" });
 
     const server = UptimeKumaServer.getInstance();
     if (monitorID in server.monitorList) {

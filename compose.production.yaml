@@ -1,0 +1,36 @@
+# Standalone single-origin stack. Stage with FLATLINE_PORT=3101, then switch
+# to 3001 for the existing Cloudflare Tunnel. No backend/UI ports are exposed.
+services:
+  flatline:
+    image: artchsh/flatline:office-live
+    restart: unless-stopped
+    volumes:
+      - ./data:/app/data
+    environment:
+      FLATLINE_CORS_ORIGINS: https://uptime.mediaboost.kz
+  dashboard:
+    image: artchsh/flatline-dashboard:office-live
+    restart: unless-stopped
+    environment:
+      FLATLINE_URL: https://uptime.mediaboost.kz
+    depends_on:
+      flatline:
+        condition: service_healthy
+  status-site:
+    image: artchsh/flatline-status:office-live
+    restart: unless-stopped
+    environment:
+      FLATLINE_URL: http://flatline:3001
+    depends_on:
+      flatline:
+        condition: service_healthy
+  gateway:
+    image: nginx:1.27-alpine
+    restart: unless-stopped
+    ports:
+      - "${FLATLINE_BIND:-127.0.0.1}:${FLATLINE_PORT:-3101}:80"
+    volumes:
+      - ./production-gateway.conf:/etc/nginx/conf.d/default.conf:ro
+    depends_on:
+      - dashboard
+      - status-site

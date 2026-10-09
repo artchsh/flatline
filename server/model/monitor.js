@@ -1060,6 +1060,8 @@ class Monitor extends BeanModel {
             log.debug("monitor", `[${this.name}] Store`);
             await R.store(bean);
 
+            require("../live-updates").publishHeartbeat(bean, uptimeCalculator);
+
             log.debug("monitor", `[${this.name}] prometheus.update`);
             const data24h = uptimeCalculator.get24Hour();
             const data30d = uptimeCalculator.get30Day();

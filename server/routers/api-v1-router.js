@@ -20,6 +20,7 @@ const { UptimeKumaServer } = require("../uptime-kuma-server");
 const { UptimeCalculator } = require("../uptime-calculator");
 const Monitor = require("../model/monitor");
 const monitorService = require("../monitor-service");
+const { getLatestMetrics } = require("../monitor-metrics");
 const openApiDocument = require("./openapi.json");
 const { UP, DOWN, PENDING, MAINTENANCE, flipStatus } = require("../../src/util");
 
@@ -30,6 +31,7 @@ const router = express.Router();
 // than 404ing before the headers are set.
 router.use(apiCors);
 router.use(express.json({ limit: "1mb" }));
+router.use(require("./live-router"));
 
 /**
  * Columns an API caller may set on a monitor.
@@ -396,6 +398,7 @@ router.get("/api/v1", (req, res) => {
             metrics: "/api/v1/monitors/{id}/metrics",
             latestMetrics: "/api/v1/monitors/{id}/metrics/latest",
             latestMetricsBulk: "/api/v1/monitors/metrics/latest?ids={ids}",
+            events: "/api/v1/events",
             incidents: "/api/v1/incidents",
             statusPages: "/api/v1/status-pages",
             maintenance: "/api/v1/maintenance",
@@ -792,16 +795,24 @@ router.get("/api/v1/monitors/metrics/latest", tokenAuth("read"), async (req, res
         // Newest by time, not by id — same ordering as the single-sample
         // endpoint, since late samples can arrive out of order.
         const placeholders = ids.map(() => "?").join(",");
-        const rows = await R.getAll(
-            `SELECT monitor_id, time, payload FROM (
-                SELECT monitor_id, time, payload,
-                    ROW_NUMBER() OVER (PARTITION BY monitor_id ORDER BY time DESC, id DESC) AS rn
-                FROM monitor_metric WHERE monitor_id IN (${placeholders})
-            ) WHERE rn = 1`,
-            ids
-        );
-
         const byId = new Map();
+        const existing = await R.getAll(`SELECT id FROM monitor WHERE id IN (${placeholders})`, ids);
+        const missing = [];
+        for (const { id } of existing) {
+            const sample = getLatestMetrics(id);
+            if (sample) {
+                byId.set(id, sample);
+            } else {
+                missing.push(id);
+            }
+        }
+        // Indexed latest-row lookups, not a window scan over all history.
+        const rows = missing.length ? await R.getAll(
+            `SELECT m.id AS monitor_id, s.time, s.payload FROM monitor m
+             JOIN monitor_metric s ON s.id = (SELECT id FROM monitor_metric
+                WHERE monitor_id = m.id ORDER BY time DESC, id DESC LIMIT 1)
+             WHERE m.id IN (${missing.map(() => "?").join(",")})`, missing
+        ) : [];
         for (const row of rows) {
             try {
                 byId.set(row.monitor_id, { time: row.time, metrics: JSON.parse(row.payload) });
@@ -837,6 +848,10 @@ router.get("/api/v1/monitors/:id/metrics/latest", tokenAuth("read"), async (req,
 
         // Newest by time, not by id: insertion order and time order can
         // differ when samples arrive late or out of order.
+        const cached = getLatestMetrics(monitor.id);
+        if (cached) {
+            return res.json({ ok: true, monitorId: monitor.id, ...cached });
+        }
         const row = await R.getRow(
             "SELECT * FROM monitor_metric WHERE monitor_id = ? ORDER BY time DESC, id DESC LIMIT 1",
             [ monitor.id ]
@@ -875,6 +890,29 @@ router.get("/api/v1/monitors/:id/metrics/latest", tokenAuth("read"), async (req,
  * @param {express.Response} res Express response
  * @returns {Promise<void>}
  */
+router.get("/api/v1/monitors/:id/metrics/summary", tokenAuth("read"), async (req, res) => {
+    try {
+        const monitor = await loadMonitor(req, res, req.params.id);
+        if (!monitor) { return; }
+        const hours = Number(req.query.hours ?? 1);
+        if (!Number.isFinite(hours) || hours <= 0 || hours > 168) {
+            return fail(res, 400, "bad_request", "`hours` must be positive and at most 168.");
+        }
+        const { scalarRows, historySummary, MAX_HISTORY_ROWS } = require("../metrics-history");
+        const to = new Date().toISOString();
+        const from = new Date(Date.now() - hours * 3600_000).toISOString();
+        const sqlTime = value => value.replace("T", " ").replace("Z", "");
+        const rows = await scalarRows(monitor.id, sqlTime(from), sqlTime(to));
+        const capped = rows.length > MAX_HISTORY_ROWS;
+        res.json({ ok: true, monitorId: monitor.id, hours, from, to, capped,
+            percentileMethod: "nearest-rank", basis: "archived snapshots (normally 30 seconds); not raw 1Hz telemetry",
+            ...historySummary(rows.slice(0, MAX_HISTORY_ROWS), from, to) });
+    } catch (e) {
+        log.error("api-v1", `GET /metrics/summary failed: ${e.message}`);
+        fail(res, 500, "server_error", e.message);
+    }
+});
+
 router.get("/api/v1/monitors/:id/metrics", tokenAuth("read"), async (req, res) => {
     try {
         const monitor = await loadMonitor(req, res, req.params.id);

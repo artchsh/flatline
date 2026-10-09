@@ -197,6 +197,7 @@ func collectDocker() ([]Container, error) {
 
 func collectDockerSocket(socketPath string) ([]Container, error) {
 	client := newDockerClient(socketPath)
+	defer client.http.CloseIdleConnections()
 
 	var list []dockerListItem
 	if err := client.get("/v1.43/containers/json?all=1", &list); err != nil {

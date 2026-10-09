@@ -43,6 +43,9 @@ func (c *pushClient) push(payload *Payload) error {
 	}
 
 	url := fmt.Sprintf("%s/api/push/%s", server, c.cfg.PushToken)
+	if payload.SampleInterval > 0 {
+		url += "?telemetry=1"
+	}
 
 	body, err := json.Marshal(map[string]any{
 		"status":  "up",

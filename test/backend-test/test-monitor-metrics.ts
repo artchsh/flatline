@@ -172,6 +172,24 @@ test("monitor metrics ingest", async (t) => {
         assert.ok(rows.length >= 1, "recent rows survive");
         assert.ok(!rows.some((r: any) => r.time.startsWith("2000-")), "old row pruned");
     });
+
+    await t.test("live telemetry updates latest without one heartbeat/history row per sample", async () => {
+        const { R } = require("redbean-node");
+        const { getLatestMetrics } = require("../../server/monitor-metrics");
+        const beforeBeats = Number(await R.count("heartbeat"));
+        const beforeMetrics = (await metricRows()).length;
+        for (let i = 0; i < 10; i++) {
+            const result = await push({ metrics: { v: 1, sampleInterval: 1, cpu: { percent: i } } }, "?telemetry=1");
+            assert.strictEqual(result.status, 200);
+        }
+        assert.strictEqual(Number(await R.count("heartbeat")), beforeBeats);
+        assert.strictEqual((await metricRows()).length, beforeMetrics);
+        const monitor = await R.findOne("monitor", " push_token = ? ", [pushToken]);
+        assert.strictEqual(getLatestMetrics(monitor.id).metrics.cpu.percent, 9);
+        const bad = await push({ metrics: [] }, "?telemetry=1");
+        assert.strictEqual(bad.status, 400);
+        assert.strictEqual(getLatestMetrics(monitor.id).metrics.cpu.percent, 9);
+    });
 });
 
 test("monitor metrics read API", async (t) => {
@@ -341,5 +359,104 @@ test("monitor metrics read API", async (t) => {
 
     await t.test("bulk latest requires auth", async () => {
         assert.strictEqual((await get(`/api/v1/monitors/metrics/latest?ids=${monitorID}`, null)).status, 401);
+    });
+
+    await t.test("cold-cache latest falls back to indexed durable history", async () => {
+        require("../../server/monitor-metrics").forgetMetrics(monitorID);
+        const { body } = await get(`/api/v1/monitors/metrics/latest?ids=${monitorID}`);
+        assert.strictEqual(body.samples[monitorID].metrics.cpu.percent, 20);
+    });
+
+    await t.test("live stream requires header auth, never a token in the URL", async () => {
+        assert.strictEqual((await fetch(`${base}/api/v1/events`)).status, 401);
+        assert.strictEqual((await fetch(`${base}/api/v1/events?token=${token}`)).status, 401);
+    });
+
+    await t.test("live stream sends committed deltas with no buffering", async () => {
+        const controller = new AbortController();
+        const response = await fetch(`${base}/api/v1/events`, { headers:{Authorization:`Bearer ${token}`}, signal:controller.signal });
+        const reader = response.body!.getReader();
+        try {
+            assert.match(response.headers.get("content-type")!, /text\/event-stream/);
+            assert.strictEqual(response.headers.get("x-accel-buffering"), "no");
+            assert.match(new TextDecoder().decode((await reader.read()).value), /"ready"/);
+            const pending = reader.read();
+            const { storeMetrics } = require("../../server/monitor-metrics");
+            await storeMetrics(monitorID, new Date().toISOString(), {v:1, cpu:{percent:73}}, {live:true});
+            const frame = new TextDecoder().decode((await pending).value);
+            assert.match(frame, /"metrics"/);
+            assert.match(frame, /"percent":73/);
+            assert.match(frame, new RegExp(`"monitorId":${monitorID}`));
+        } finally { controller.abort(); await reader.cancel().catch(() => {}); }
+    });
+
+    await t.test("live streams are bounded per key even for concurrent opens", async () => {
+        const controllers = Array.from({length:9}, () => new AbortController());
+        try {
+            const responses = await Promise.all(controllers.map(c => fetch(`${base}/api/v1/events`, {headers:{Authorization:`Bearer ${token}`}, signal:c.signal})));
+            assert.strictEqual(responses.filter(r => r.status === 200).length, 8);
+            assert.strictEqual(responses.filter(r => r.status === 429).length, 1);
+        } finally { controllers.forEach(c => c.abort()); }
+        await new Promise(resolve => setTimeout(resolve, 30));
+    });
+
+    await t.test("revocation closes an existing live stream at revalidation", async (st) => {
+        const { R } = require("redbean-node");
+        const keyID = Number(token.split("_")[0].slice(2));
+        const controller = new AbortController();
+        st.mock.timers.enable({apis:["setInterval"]});
+        const response = await fetch(`${base}/api/v1/events`, {headers:{Authorization:`Bearer ${token}`}, signal:controller.signal});
+        const reader = response.body!.getReader();
+        try {
+            await reader.read();
+            await R.exec("UPDATE api_key SET active = 0 WHERE id = ?", [keyID]);
+            const ended = reader.read().then(r => r.done || new TextDecoder().decode(r.value).includes("unauthorized"), () => true);
+            st.mock.timers.tick(15_000);
+            assert.strictEqual(await ended, true);
+        } finally {
+            controller.abort();
+            await R.exec("UPDATE api_key SET active = 1 WHERE id = ?", [keyID]);
+            st.mock.timers.reset();
+        }
+    });
+
+    await t.test("latest cache compares actual times across ISO and SQL timestamp formats", async () => {
+        const { storeMetrics, getLatestMetrics } = require("../../server/monitor-metrics");
+        await storeMetrics(monitorID, "2099-01-01T00:00:00Z", {cpu:{percent:1}}, {live:true});
+        await storeMetrics(monitorID, "2099-01-01 00:00:01", {cpu:{percent:2}}, {live:true});
+        await storeMetrics(monitorID, "2099-01-01T00:00:00.500Z", {cpu:{percent:3}}, {live:true});
+        assert.strictEqual(getLatestMetrics(monitorID).metrics.cpu.percent, 2);
+    });
+
+    await t.test("summary includes more than 1000 archived samples and full-window percentiles", async () => {
+        const { R } = require("redbean-node");
+        const monitor = R.dispense("monitor");
+        monitor.name = "Summary host"; monitor.type = "push"; monitor.interval = 180;
+        monitor.retryInterval = 180; monitor.timeout = 144; monitor.active = 0;
+        await R.store(monitor);
+        const now = Date.now() - 1000;
+        const values = [];
+        for (let i=0;i<1500;i++) {
+            values.push(monitor.id, new Date(now-i*1000).toISOString().replace("T"," ").replace("Z",""), JSON.stringify({cpu:{percent:i%100},mem:{percent:50},gpu:i===0 ? {available:true,gpus:[{util:0,memUsed:10,memTotal:100}]} : {available:false}}));
+        }
+        await R.exec(`INSERT INTO monitor_metric (monitor_id,time,payload) VALUES ${Array(1500).fill("(?,?,?)").join(",")}`, values);
+        const { status, body } = await get(`/api/v1/monitors/${monitor.id}/metrics/summary?hours=1`);
+        assert.strictEqual(status,200); assert.strictEqual(body.samples,1500); assert.strictEqual(body.capped,false);
+        assert.strictEqual(body.stats.cpu.p90,89); assert.strictEqual(body.stats.cpu.p95,94); assert.strictEqual(body.stats.cpu.p99,98);
+        assert.strictEqual(body.stats.gpu.count,1); assert.strictEqual(body.stats.gpu.p99,0);
+        assert.strictEqual(body.stats.vram.p99,10); assert.ok(body.series.length<=240);
+        assert.strictEqual((await get(`/api/v1/monitors/${monitor.id}/metrics/summary?hours=0`)).status,400);
+        assert.strictEqual((await get(`/api/v1/monitors/${monitor.id}/metrics/summary?hours=169`)).status,400);
+        assert.strictEqual((await get(`/api/v1/monitors/${monitor.id}/metrics/summary`,null)).status,401);
+    });
+
+    await t.test("banned accounts cannot open streams using previously minted tokens", async () => {
+        const { R } = require("redbean-node");
+        const key = await R.findOne("api_key", " id = ? ", [Number(token.split("_")[0].slice(2))]);
+        try {
+            await R.exec("UPDATE better_auth_user SET banned = 1 WHERE id = ?", [key.user_id]);
+            const response = await fetch(`${base}/api/v1/events`, {headers:{Authorization:`Bearer ${token}`}});
+            assert.strictEqual(response.status, 401);
+        } finally { await R.exec("UPDATE better_auth_user SET banned = 0 WHERE id = ?", [key.user_id]); }
     });
 });
