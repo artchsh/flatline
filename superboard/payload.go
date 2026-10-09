@@ -11,6 +11,11 @@ package main
 // "no GPU", an empty docker list means "no Docker", an empty disk list means
 // "could not read mounts". The server cannot distinguish "missing" from
 // "broken" if we send nulls, and chasing that ghost is worse than no data.
+//
+// The one exception that proves the rule is dockerError: an empty docker
+// list is ambiguous (no containers vs. cannot see the daemon), so a failed
+// collection attaches the reason. The board shows "unavailable" for that,
+// "no containers" for a clean empty list.
 
 /** Envelope version. Bump when fields change shape, never for additions. */
 const payloadVersion = 1
@@ -23,16 +28,24 @@ type Host struct {
 }
 
 // CPU is a point sample over a 1s window, not an instantaneous reading.
+// PerCore holds one percentage per logical CPU in index order; power vs.
+// efficiency cores are deliberately not distinguished — the board only cares
+// which ones are hot. Temp is meaningful only when nonzero: 0 means "no
+// sensor", not "freezing", and the board hides it.
 type CPU struct {
-	Percent float64 `json:"percent"`
-	Cores   int     `json:"cores"`
+	Percent float64   `json:"percent"`
+	Cores   int       `json:"cores"`
+	PerCore []float64 `json:"perCore,omitempty"`
+	Temp    float64   `json:"temp,omitempty"`
 }
 
-// Mem holds bytes for totals and percent 0–100.
+// Mem holds bytes for totals and percent 0–100. Temp is the same deal as
+// CPU: present on almost nothing (VPS never), hidden when zero.
 type Mem struct {
 	Total   uint64  `json:"total"`
 	Used    uint64  `json:"used"`
 	Percent float64 `json:"percent"`
+	Temp    float64 `json:"temp,omitempty"`
 }
 
 // Disk is one mount. The agent sends every local mount it can read; the board
@@ -53,6 +66,20 @@ type GPU struct {
 	MemTotal  uint64  `json:"memTotal,omitempty"`
 	Temp      float64 `json:"temp,omitempty"`
 	Name      string  `json:"name,omitempty"`
+	// Gpus is every GPU on the box. The scalar fields above repeat the
+	// first entry so old readers keep working; new readers use this.
+	Gpus []GPUDetail `json:"gpus,omitempty"`
+}
+
+// GPUDetail is one physical GPU: compute load, VRAM pool and temperature.
+// The board renders load and VRAM separately — one number cannot describe a
+// card that is compute-idle with full memory, which is the common ML shape.
+type GPUDetail struct {
+	Name     string  `json:"name,omitempty"`
+	Util     float64 `json:"util"`
+	MemUsed  uint64  `json:"memUsed"`
+	MemTotal uint64  `json:"memTotal"`
+	Temp     float64 `json:"temp,omitempty"`
 }
 
 // Container is list + state, not stats. Per-container CPU/mem needs the stats
@@ -63,16 +90,20 @@ type Container struct {
 	State  string   `json:"state"`
 	Health string   `json:"health,omitempty"`
 	Ports  []string `json:"ports,omitempty"`
+	// Uptime in seconds since the container started. 0 means unknown, not
+	// "just started" — the board shows nothing rather than a wrong number.
+	Uptime uint64 `json:"uptime,omitempty"`
 }
 
 // Payload is the full document POSTed as `metrics` to /api/push/:token.
 // Unknown fields are ignored server-side, so additions are safe.
 type Payload struct {
-	V      int         `json:"v"`
-	Host   Host        `json:"host"`
-	CPU    CPU         `json:"cpu"`
-	Mem    Mem         `json:"mem"`
-	Disk   []Disk      `json:"disk"`
-	GPU    GPU         `json:"gpu"`
-	Docker []Container `json:"docker"`
+	V           int         `json:"v"`
+	Host        Host        `json:"host"`
+	CPU         CPU         `json:"cpu"`
+	Mem         Mem         `json:"mem"`
+	Disk        []Disk      `json:"disk"`
+	GPU         GPU         `json:"gpu"`
+	Docker      []Container `json:"docker"`
+	DockerError string      `json:"dockerError,omitempty"`
 }

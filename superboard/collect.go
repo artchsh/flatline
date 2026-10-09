@@ -15,6 +15,7 @@ import (
 	"github.com/shirou/gopsutil/v4/disk"
 	"github.com/shirou/gopsutil/v4/host"
 	"github.com/shirou/gopsutil/v4/mem"
+	"github.com/shirou/gopsutil/v4/sensors"
 )
 
 // collectHost identifies the machine.
@@ -43,25 +44,82 @@ func collectHost() (Host, error) {
 }
 
 // collectCPU samples over a 1s window. An instantaneous reading would mostly
-// measure the sampler itself.
+// measure the sampler itself. One per-core call provides both the aggregate
+// (mean) and the per-core breakdown, so there is a single window, not two.
 func collectCPU() (CPU, error) {
 	cores, err := cpu.Counts(true)
 	if err != nil {
 		return CPU{}, fmt.Errorf("cpu cores: %w", err)
 	}
 
-	percents, err := cpu.Percent(time.Second, false)
+	percents, err := cpu.Percent(time.Second, true)
 	if err != nil {
 		return CPU{}, fmt.Errorf("cpu percent: %w", err)
 	}
 
 	percent := 0.0
 	if len(percents) > 0 {
-		percent = percents[0]
+		sum := 0.0
+		for _, p := range percents {
+			sum += p
+		}
+		percent = sum / float64(len(percents))
 	}
 
-	return CPU{Percent: percent, Cores: cores}, nil
+	return CPU{
+		Percent: percent,
+		Cores:   cores,
+		PerCore: percents,
+		Temp:    collectTemp(cpuSensorKeys),
+	}, nil
 }
+
+// cpuSensorKeys matches Linux hwmon labels that describe processor heat.
+// Vendor naming is chaos (coretemp, k10temp, zenpower, ...), so this is a
+// substring match, not a list. Anything not matching is ignored: a hot NVMe
+// must never present itself as a hot CPU.
+var cpuSensorKeys = []string{"coretemp", "cpu", "package", "k10temp", "zenpower", "acpitz"}
+
+// memSensorKeys matches memory temperature sensors. Almost nothing exposes
+// these (VPS never does), so this list is aspirational: DDR5 TSODs, if a
+// future kernel ever surfaces them under hwmon.
+var memSensorKeys = []string{"dimm", "ddr", "memory"}
+
+// maxSensorTemp returns the hottest plausible reading among sensors whose
+// key contains one of the given substrings, or 0 when there is nothing.
+//
+// Plausibility matters: virtual machines report 0, and broken drivers report
+// absurd values. Both mean "no data", and the board hides a zero, so clamping
+// here can never paint a wrong number.
+func maxSensorTemp(keys []string) float64 {
+	temps, err := sensors.SensorsTemperatures()
+	if err != nil {
+		return 0
+	}
+
+	best := 0.0
+	for _, t := range temps {
+		key := strings.ToLower(t.SensorKey)
+		matched := false
+		for _, k := range keys {
+			if strings.Contains(key, k) {
+				matched = true
+				break
+			}
+		}
+		if !matched {
+			continue
+		}
+		if t.Temperature > best && t.Temperature < 125 {
+			best = t.Temperature
+		}
+	}
+
+	return best
+}
+
+// collectTemp is a hook for tests: production passes maxSensorTemp.
+var collectTemp = maxSensorTemp
 
 // collectMem reports bytes and percent.
 func collectMem() (Mem, error) {
@@ -70,7 +128,12 @@ func collectMem() (Mem, error) {
 		return Mem{}, fmt.Errorf("memory: %w", err)
 	}
 
-	return Mem{Total: vm.Total, Used: vm.Used, Percent: vm.UsedPercent}, nil
+	return Mem{
+		Total:   vm.Total,
+		Used:    vm.Used,
+		Percent: vm.UsedPercent,
+		Temp:    collectTemp(memSensorKeys),
+	}, nil
 }
 
 // collectDisk reports every local mount it can read.
@@ -140,12 +203,7 @@ func collectGPU() GPU {
 		return GPU{Available: false}
 	}
 
-	// First GPU only in v1; multi-GPU aggregation is a display concern.
-	r := records[0]
-	if len(r) < 5 {
-		log.Printf("warning: nvidia-smi returned %d fields, want 5", len(r))
-		return GPU{Available: false}
-	}
+	// Every GPU on the box; the scalar fields below repeat the first.
 
 	parse := func(s string) float64 {
 		f, _ := strconv.ParseFloat(strings.TrimSpace(s), 64)
@@ -157,13 +215,36 @@ func collectGPU() GPU {
 		return uint64(f * 1024 * 1024)
 	}
 
+	gpus := make([]GPUDetail, 0, len(records))
+	for _, r := range records {
+		if len(r) < 5 {
+			log.Printf("warning: nvidia-smi returned %d fields, want 5 — skipping GPU", len(r))
+			continue
+		}
+		gpus = append(gpus, GPUDetail{
+			Name:     strings.TrimSpace(r[0]),
+			Util:     parse(r[1]),
+			MemTotal: parseBytes(r[2]),
+			MemUsed:  parseBytes(r[3]),
+			Temp:     parse(r[4]),
+		})
+	}
+
+	if len(gpus) == 0 {
+		return GPU{Available: false}
+	}
+
+	// The scalar fields repeat the first GPU so old readers keep working;
+	// new readers use Gpus.
+	first := gpus[0]
 	return GPU{
 		Available: true,
-		Name:      strings.TrimSpace(r[0]),
-		Util:      parse(r[1]),
-		MemTotal:  parseBytes(r[2]),
-		MemUsed:   parseBytes(r[3]),
-		Temp:      parse(r[4]),
+		Name:      first.Name,
+		Util:      first.Util,
+		MemTotal:  first.MemTotal,
+		MemUsed:   first.MemUsed,
+		Temp:      first.Temp,
+		Gpus:      gpus,
 	}
 }
 
@@ -192,13 +273,15 @@ func collect() (*Payload, error) {
 
 	containers, err := collectDocker()
 	if err != nil {
-		// Docker absent is normal (most boxes run without it); absent data is
-		// an empty list, not a failed push.
+		// Docker absent is normal (most boxes run without it). But an empty
+		// list is ambiguous — no containers vs. cannot see the daemon — so
+		// the reason travels with the payload and the board can say
+		// "unavailable" instead of silently showing "none".
 		log.Printf("warning: docker unavailable: %v", err)
 		containers = nil
 	}
 
-	return &Payload{
+	payload := &Payload{
 		V:      payloadVersion,
 		Host:   h,
 		CPU:    c,
@@ -206,5 +289,10 @@ func collect() (*Payload, error) {
 		Disk:   disks,
 		GPU:    collectGPU(),
 		Docker: containers,
-	}, nil
+	}
+	if err != nil {
+		payload.DockerError = err.Error()
+	}
+
+	return payload, nil
 }

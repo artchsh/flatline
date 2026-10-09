@@ -255,8 +255,8 @@ export function deleteMonitor(id: number, deleteChildren = false): Promise<{ ok:
 export interface MetricsPayload {
     v?: number;
     host?: { hostname?: string; os?: string; uptime?: number };
-    cpu?: { percent?: number; cores?: number };
-    mem?: { total?: number; used?: number; percent?: number };
+    cpu?: { percent?: number; cores?: number; perCore?: number[]; temp?: number };
+    mem?: { total?: number; used?: number; percent?: number; temp?: number };
     disk?: { mount?: string; total?: number; used?: number; percent?: number }[];
     gpu?: {
         available?: boolean;
@@ -265,8 +265,10 @@ export interface MetricsPayload {
         memUsed?: number;
         memTotal?: number;
         temp?: number;
+        gpus?: { name?: string; util?: number; memUsed?: number; memTotal?: number; temp?: number }[];
     };
-    docker?: { name?: string; image?: string; state?: string; health?: string; ports?: string[] }[];
+    docker?: { name?: string; image?: string; state?: string; health?: string; ports?: string[]; uptime?: number }[];
+    dockerError?: string;
 }
 
 export interface LatestMetrics {

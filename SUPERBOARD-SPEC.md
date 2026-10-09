@@ -59,13 +59,14 @@ Migration: `db/knex_migrations/2026-10-0X-0000-monitor-metric.js`
 {
     "v": 1,
     "host": { "hostname": "client-a-db-01", "os": "linux", "uptime": 864001 },
-    "cpu": { "percent": 23.5, "cores": 8 },
+    "cpu": { "percent": 23.5, "cores": 8, "perCore": [12.1, 88.4, ...] },
     "mem": { "total": 33554432, "used": 12582912, "percent": 37.5 },
     "disk": [ { "mount": "/", "total": 100, "used": 42, "percent": 42.0 } ],
     "gpu": { "available": false },
     "docker": [
-        { "name": "api", "image": "api:1.4.2", "state": "running", "health": "healthy", "ports": [ "8080:80" ] }
-    ]
+        { "name": "api", "image": "api:1.4.2", "state": "running", "health": "healthy", "ports": [ "8080:80" ], "uptime": 86400 }
+    ],
+    "dockerError": "no docker access (...)" // only when collection failed
 }
 ```
 
@@ -74,6 +75,11 @@ Notes:
   uptime seconds. The agent and the board must never disagree about units.
 - `gpu.available: false` is explicit, never absent: "no GPU" and "collector
   broken" must be distinguishable or you will chase ghosts.
+- `dockerError` is present only when collection failed, so the board can say
+  "unavailable" instead of silently showing "none" for a blind agent.
+- `cpu.perCore` is one percentage per logical CPU; `temp` fields are omitted
+  when zero because zero means "no sensor", not a temperature.
+- `container.uptime` is seconds since start, 0 when unknown.
 - Disk is an array (root plus any data mounts); the agent sends every local
   mount it can read, the board shows the fullest first.
 - `docker` is an empty array when Docker is absent, not null, for the same reason.
@@ -124,6 +130,9 @@ Single static binary (`CGO_ENABLED=0`), linux/amd64. No runtime dependencies.
 ### Behaviour
 
 - Loop every 60s (flag-configurable). Jitter ±5s so ten agents do not thunder.
+- The monitor's check interval must be at least 3× the agent interval (e.g.
+  60s pushes against a 180s interval). Matching them flaps: a push landing
+  seconds past the window reads as DOWN, then UP on arrival, every cycle.
 - Push failure retries with backoff, then waits for the next tick. A failed push
   is *not* reported as host-down locally — silence is the signal, and the
   server already turns silence into an alert.

@@ -1,5 +1,6 @@
 import type { MonitorSummary, MetricsPayload } from "@/lib/api";
 import { Badge } from "@/components/ui/badge";
+import { CoreSquares } from "@/components/CoreSquares";
 import { MetricBar, usageTone } from "@/components/MetricBar";
 
 export interface FleetServer {
@@ -53,6 +54,42 @@ export function ageOf(value: string | null | undefined): string {
     return `${Math.round(seconds / 86400)}d`;
 }
 
+/**
+ * Format a duration in seconds compactly.
+ * @param seconds Duration, or undefined
+ * @returns e.g. "3d", or null when unknown
+ */
+export function formatDuration(seconds: number | undefined): string | null {
+    if (seconds === undefined || !Number.isFinite(seconds) || seconds <= 0) {
+        return null;
+    }
+    if (seconds < 60) {
+        return `${Math.round(seconds)}s`;
+    }
+    if (seconds < 3600) {
+        return `${Math.round(seconds / 60)}m`;
+    }
+    if (seconds < 86400) {
+        return `${Math.round(seconds / 3600)}h`;
+    }
+    return `${Math.round(seconds / 86400)}d`;
+}
+
+/**
+ * A temperature chip, or nothing.
+ *
+ * Zero and absent both mean "no sensor" — VPS boxes report neither, and a
+ * 0°C chip would be a lie. The caller passes the raw value; this decides.
+ * @param temp Celsius, or undefined
+ * @returns e.g. "68°C", or null
+ */
+function tempChip(temp: number | undefined): string | null {
+    if (temp === undefined || !Number.isFinite(temp) || temp <= 0) {
+        return null;
+    }
+    return `${Math.round(temp)}°C`;
+}
+
 function statusOf(status: number): { label: string; tone: "up" | "down" | "degraded" | "maintenance" | "neutral" } {
     switch (status) {
         case 1:
@@ -96,7 +133,23 @@ export function FleetCard({ server }: { server: FleetServer }) {
     const cpu = metrics.cpu;
     const mem = metrics.mem;
     const disk = fullestDisk(metrics.disk);
+
+    // New agents send every GPU; old ones send only the scalar first-GPU
+    // fields. Normalise to a list so the render has one shape.
     const gpu = metrics.gpu;
+    const gpus = gpu?.gpus?.length
+        ? gpu.gpus
+        : gpu?.available
+          ? [{ name: gpu.name, util: gpu.util, memUsed: gpu.memUsed, memTotal: gpu.memTotal, temp: gpu.temp }]
+          : [];
+
+    // Peak core carries the numbers the squares cannot: twenty tooltips do
+    // not survive the wall, one peak figure does.
+    const peak =
+        cpu?.perCore?.length ? Math.max(...cpu.perCore.filter((v) => Number.isFinite(v))) : undefined;
+
+    const cpuTemp = tempChip(cpu?.temp);
+    const memTemp = tempChip(mem?.temp);
 
     // A sample older than two intervals means the agent has missed at least
     // one beat: the monitor is about to (or already did) go down. Show the
@@ -105,11 +158,21 @@ export function FleetCard({ server }: { server: FleetServer }) {
     const stale = Number.isFinite(ageMs) && ageMs > (monitor.interval || 60) * 2 * 1000;
 
     const containers = metrics.docker ?? [];
+    const dockerError = metrics.dockerError;
     const running = containers.filter((c) => c.state === "running");
     const unhealthy = containers.filter((c) => c.health !== undefined && c.health !== "healthy");
     const stopped = containers.length - running.length;
     const troubled = new Set([ ...unhealthy, ...containers.filter((c) => c.health === undefined && c.state === "restarting") ]);
     const troubledNames = [ ...troubled ].map((c) => c.name ?? "?");
+
+    // Every container on one tooltip line: name, state and uptime. The row
+    // itself stays one line; the details are one hover away.
+    const containerTip = containers
+        .map((c) => {
+            const up = formatDuration(c.uptime);
+            return `${c.name ?? "?"}: ${c.state ?? "?"}${c.health ? ` (${c.health})` : ""}${up ? ` · up ${up}` : ""}`;
+        })
+        .join("\n");
 
     return (
         <div
@@ -137,39 +200,82 @@ export function FleetCard({ server }: { server: FleetServer }) {
             </div>
 
             <div className="grid grid-cols-1 gap-2.5">
-                <MetricBar
-                    label="CPU"
-                    percent={cpu?.percent}
-                    tone={cpu?.percent === undefined ? "muted" : usageTone(cpu.percent)}
-                />
+                <div>
+                    <MetricBar
+                        label="CPU"
+                        percent={cpu?.percent}
+                        tone={cpu?.percent === undefined ? "muted" : usageTone(cpu.percent)}
+                        detail={[
+                            peak !== undefined && Number.isFinite(peak) ? `peak ${Math.round(peak)}%` : null,
+                            cpuTemp,
+                        ]
+                            .filter(Boolean)
+                            .join(" · ")}
+                    />
+                    {cpu?.perCore && cpu.perCore.length > 0 ? (
+                        <div className="mt-1.5">
+                            <CoreSquares values={cpu.perCore} label="core" />
+                        </div>
+                    ) : null}
+                </div>
                 <MetricBar
                     label="RAM"
                     percent={mem?.percent}
-                    detail={mem ? `${formatBytes(mem.used)} / ${formatBytes(mem.total)}` : undefined}
+                    detail={[
+                        mem ? `${formatBytes(mem.used)} / ${formatBytes(mem.total)}` : null,
+                        memTemp,
+                    ]
+                        .filter(Boolean)
+                        .join(" · ")}
                 />
                 <MetricBar
                     label={disk ? `Disk ${disk.mount}` : "Disk"}
                     percent={disk?.percent}
                     detail={disk ? `${formatBytes(disk.used)} / ${formatBytes(disk.total)}` : "no mounts reported"}
                 />
-                {gpu?.available ? (
-                    <MetricBar
-                        label={`GPU${gpu.name ? ` ${gpu.name}` : ""}`}
-                        percent={gpu.util}
-                        detail={[
-                            gpu.memTotal !== undefined ? `${formatBytes(gpu.memUsed)} / ${formatBytes(gpu.memTotal)}` : null,
-                            gpu.temp !== undefined ? `${Math.round(gpu.temp)}°C` : null,
-                        ]
-                            .filter(Boolean)
-                            .join(" · ")}
-                    />
-                ) : null}
+                {gpus.map((g, i) => {
+                    const gpuName = g.name ?? (gpus.length > 1 ? `GPU ${i}` : "GPU");
+                    const gpuTemp = tempChip(g.temp);
+                    return (
+                        <div key={i}>
+                            <div className="flex items-baseline justify-between gap-2">
+                                <span className="text-xs font-medium tracking-wide text-muted-foreground uppercase">
+                                    {gpuName}
+                                </span>
+                                <span className="tnum text-sm font-semibold">
+                                    {g.util === undefined || Number.isNaN(g.util) ? "—" : `${Math.round(g.util)}%`}
+                                    {gpuTemp ? <span className="ml-2 text-xs font-normal text-quiet">{gpuTemp}</span> : null}
+                                </span>
+                            </div>
+                            <div className="mt-1.5">
+                                <CoreSquares values={g.util !== undefined ? [g.util] : []} label={gpuName} />
+                            </div>
+                            {g.memTotal !== undefined ? (
+                                <div className="mt-1.5">
+                                    <MetricBar
+                                        label="VRAM"
+                                        percent={
+                                            g.memUsed !== undefined
+                                                ? (g.memUsed / g.memTotal) * 100
+                                                : undefined
+                                        }
+                                        detail={`${formatBytes(g.memUsed)} / ${formatBytes(g.memTotal)}`}
+                                    />
+                                </div>
+                            ) : null}
+                        </div>
+                    );
+                })}
             </div>
 
             <div className="mt-auto flex items-baseline justify-between gap-2 border-t border-border/60 pt-2 text-xs">
-                <span className="truncate text-quiet" title={troubledNames.join(", ")}>
+                <span className="truncate text-quiet" title={containerTip || dockerError || troubledNames.join(", ")}>
                     {containers.length === 0 ? (
-                        "no containers"
+                        dockerError ? (
+                            <span className="font-semibold text-warn">containers unavailable</span>
+                        ) : (
+                            "no containers"
+                        )
                     ) : (
                         <>
                             <span className="tnum">{running.length}</span>/{containers.length} containers up

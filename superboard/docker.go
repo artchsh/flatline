@@ -7,14 +7,52 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 )
 
-// Docker socket path. The agent only reads; it never creates, starts, or
-// stops anything, which is worth stating because the socket is root-equivalent
-// and whoever audits this will ask.
-const dockerSocketPath = "/var/run/docker.sock"
+// The agent only reads; it never creates, starts, or stops anything, which
+// is worth stating because the socket is root-equivalent and whoever audits
+// this will ask.
+const defaultSocketPath = "/var/run/docker.sock"
+
+// dockerSocketPaths are tried in order. DOCKER_HOST wins when set
+// (unix:// only — TCP daemons are out of scope for v1); then the standard
+// location, then the rootless one. A hardcoded single path is how agents go
+// blind on rootless boxes while insisting everything is fine.
+func dockerSocketPaths() []string {
+	if host, ok := os.LookupEnv("DOCKER_HOST"); ok {
+		if rest, found := strings.CutPrefix(host, "unix://"); found {
+			return []string{rest}
+		}
+		log.Printf("warning: DOCKER_HOST %q is not a unix socket, ignoring", host)
+	}
+
+	paths := []string{defaultSocketPath}
+
+	// Rootless daemons live under the user's runtime dir, not the system
+	// path. This is the miss that blinds agents on exactly the kind of box
+	// that runs rootless Docker: /var/run/docker.sock exists but belongs to
+	// an empty system daemon.
+	if xdg := os.Getenv("XDG_RUNTIME_DIR"); xdg != "" {
+		paths = append(paths, filepath.Join(xdg, "docker.sock"))
+	}
+	if home, err := os.UserHomeDir(); err == nil {
+		rootless := filepath.Join(home, ".docker", "run", "docker.sock")
+		if rootless != defaultSocketPath {
+			paths = append(paths, rootless)
+		}
+	}
+	if matches, err := filepath.Glob("/run/user/*/docker.sock"); err == nil {
+		paths = append(paths, matches...)
+	}
+
+	return paths
+}
 
 // dockerListItem is the subset of /containers/json we care about.
 type dockerListItem struct {
@@ -37,8 +75,9 @@ type dockerInspect struct {
 		Healthcheck *struct{} `json:"Healthcheck"`
 	} `json:"Config"`
 	State struct {
-		Status string `json:"Status"`
-		Health *struct {
+		Status    string `json:"Status"`
+		StartedAt string `json:"StartedAt"`
+		Health    *struct {
 			Status string `json:"Status"`
 		} `json:"Health"`
 	} `json:"State"`
@@ -50,6 +89,23 @@ type dockerInspect struct {
 	} `json:"NetworkSettings"`
 }
 
+// containerUptime converts a Docker StartedAt timestamp (RFC3339) into
+// seconds since start. 0 means unknown — never a wrong number.
+func containerUptime(startedAt string) uint64 {
+	if startedAt == "" {
+		return 0
+	}
+	started, err := time.Parse(time.RFC3339, startedAt)
+	if err != nil {
+		return 0
+	}
+	seconds := time.Since(started).Seconds()
+	if seconds < 0 {
+		return 0
+	}
+	return uint64(seconds)
+}
+
 // dockerClient talks to the daemon over its Unix socket with the standard
 // library only. The full docker client library is a large dependency for two
 // GET endpoints, and pinning its API version matrix is its own maintenance
@@ -58,10 +114,10 @@ type dockerClient struct {
 	http *http.Client
 }
 
-func newDockerClient() *dockerClient {
+func newDockerClient(socketPath string) *dockerClient {
 	transport := &http.Transport{
 		DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
-			return (&net.Dialer{Timeout: 5 * time.Second}).DialContext(ctx, "unix", dockerSocketPath)
+			return (&net.Dialer{Timeout: 5 * time.Second}).DialContext(ctx, "unix", socketPath)
 		},
 	}
 
@@ -89,13 +145,58 @@ func (c *dockerClient) get(path string, out any) error {
 	return json.NewDecoder(resp.Body).Decode(out)
 }
 
-// collectDocker lists containers with state, health and exposed ports.
+// collectDocker lists containers with state, health, ports and uptime.
+//
+// Socket first: structured data, no CLI dependency. `docker ps` is the
+// fallback when no socket is reachable — same daemon, same permissions, but
+// worth trying because the failure modes differ (a missing CLI binary vs. a
+// missing socket). Both paths answer "what is running, is it healthy, how
+// long has it been up".
 //
 // No stats streaming in v1: per-container CPU/mem needs the stats endpoint
-// held open per container, which is heavier on both ends. List + state answers
-// "what is running and is it healthy", which is the v1 question.
+// held open per container, which is heavier on both ends.
 func collectDocker() ([]Container, error) {
-	client := newDockerClient()
+	var errs []string
+	var firstSuccess []Container
+	firstPath := ""
+
+	// Every reachable socket is queried: the first path in discovery order
+	// is often an empty system daemon on rootless boxes, and "reachable"
+	// must not win over "has containers". First non-empty success wins;
+	// otherwise the first success stands; otherwise the ps fallback.
+	for _, socketPath := range dockerSocketPaths() {
+		containers, err := collectDockerSocket(socketPath)
+		if err != nil {
+			errs = append(errs, fmt.Sprintf("%s: %v", socketPath, err))
+			continue
+		}
+		if firstSuccess == nil {
+			firstSuccess = containers
+			firstPath = socketPath
+		}
+		if len(containers) > 0 {
+			if socketPath != firstPath {
+				log.Printf("docker: using %s (%d containers) over empty %s", socketPath, len(containers), firstPath)
+			}
+			return containers, nil
+		}
+	}
+
+	if firstSuccess != nil {
+		return firstSuccess, nil
+	}
+
+	containers, err := collectDockerPS()
+	if err == nil {
+		return containers, nil
+	}
+	errs = append(errs, fmt.Sprintf("docker ps: %v", err))
+
+	return nil, fmt.Errorf("no docker access (%s)", strings.Join(errs, "; "))
+}
+
+func collectDockerSocket(socketPath string) ([]Container, error) {
+	client := newDockerClient(socketPath)
 
 	var list []dockerListItem
 	if err := client.get("/v1.43/containers/json?all=1", &list); err != nil {
@@ -115,15 +216,19 @@ func collectDocker() ([]Container, error) {
 			State: item.State,
 		}
 
-		// Health and ports come from inspect; a failure for one container
-		// degrades that container, never the whole list.
+		// Health, ports and uptime come from inspect; a failure for one
+		// container degrades that container, never the whole list.
 		var insp dockerInspect
 		if err := client.get("/v1.43/containers/"+item.ID+"/json", &insp); err != nil {
 			log.Printf("warning: docker inspect %s failed: %v", name, err)
 		} else {
-			if insp.State.Health != nil {
+			// Health is meaningful only while running: a stopped container
+			// keeps its last health status, which would otherwise paint an
+			// exited box as "unhealthy" instead of merely stopped.
+			if insp.State.Status == "running" && insp.State.Health != nil {
 				c.Health = insp.State.Health.Status
 			}
+			c.Uptime = containerUptime(insp.State.StartedAt)
 			for containerPort, bindings := range insp.NetworkSettings.Ports {
 				private := strings.Split(containerPort, "/")[0]
 				if len(bindings) == 0 {
@@ -147,6 +252,8 @@ func collectDocker() ([]Container, error) {
 			}
 		}
 
+		c.Ports = dedupPorts(c.Ports)
+
 		out = append(out, c)
 	}
 
@@ -155,4 +262,169 @@ func collectDocker() ([]Container, error) {
 	}
 
 	return out, nil
+}
+
+// dedupPorts drops repeats while keeping order. Inspect reports one binding
+// per family, so dual-stack publishes arrive twice ("3001:3001" over IPv4
+// and IPv6) — the board should show the mapping once.
+func dedupPorts(ports []string) []string {
+	seen := make(map[string]bool, len(ports))
+	out := ports[:0]
+	for _, p := range ports {
+		if !seen[p] {
+			seen[p] = true
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+// dockerPSFormat pins the columns we parse. An explicit template keeps new
+// Docker versions from rearranging the human table out from under us.
+const dockerPSFormat = "{{.ID}}|{{.Names}}|{{.Image}}|{{.State}}|{{.Status}}|{{.Ports}}"
+
+// collectDockerPS shells out to the CLI and parses its table.
+//
+// Same daemon and same permissions as the socket, so this is not a privilege
+// workaround — it is a second chance for environments where the socket path
+// is exotic but the CLI knows where to look (DOCKER_HOST, contexts).
+func collectDockerPS() ([]Container, error) {
+	path, err := exec.LookPath("docker")
+	if err != nil {
+		return nil, fmt.Errorf("docker CLI not installed")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	out, err := exec.CommandContext(ctx, path, "ps", "--no-trunc", "--format", dockerPSFormat).Output()
+	if err != nil {
+		return nil, fmt.Errorf("docker ps: %w", err)
+	}
+
+	var containers []Container
+	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		if line == "" {
+			continue
+		}
+		containers = append(containers, parseDockerPSLine(line))
+	}
+
+	if containers == nil {
+		containers = []Container{}
+	}
+
+	return containers, nil
+}
+
+// parseDockerPSLine parses one --format row: ID|Names|Image|State|Status|Ports.
+//
+// Status carries health in parentheses ("Up 3 days (healthy)") and uptime in
+// words ("Up 3 days", "Up 5 minutes", "Created", "Exited (0) 2 hours ago").
+// Health parsing is exact; uptime parsing is best-effort and yields 0 rather
+// than a wrong number when the wording surprises us.
+func parseDockerPSLine(line string) Container {
+	fields := strings.SplitN(line, "|", 6)
+	for len(fields) < 6 {
+		fields = append(fields, "")
+	}
+
+	c := Container{
+		Image: fields[2],
+		State: fields[3],
+	}
+
+	if fields[1] != "" {
+		c.Name = strings.TrimPrefix(strings.Split(fields[1], ",")[0], "/")
+	} else if len(fields[0]) >= 12 {
+		c.Name = fields[0][:12]
+	} else {
+		c.Name = fields[0]
+	}
+
+	status := fields[4]
+	switch {
+	case strings.Contains(status, "(healthy)"):
+		c.Health = "healthy"
+	case strings.Contains(status, "(unhealthy)"):
+		c.Health = "unhealthy"
+	case strings.Contains(status, "(health: starting)"):
+		c.Health = "starting"
+	}
+
+	c.Uptime = parseDockerUpTime(status)
+
+	for _, p := range strings.Split(fields[5], ", ") {
+		p = strings.TrimSpace(p)
+		if p == "" {
+			continue
+		}
+		// "0.0.0.0:8080->80/tcp" becomes "8080:80".
+		if arrow := strings.Index(p, "->"); arrow >= 0 {
+			hostPart, containerPart := p[:arrow], p[arrow+2:]
+			hostPort := hostPart[strings.LastIndex(hostPart, ":")+1:]
+			containerPort := strings.Split(containerPart, "/")[0]
+			c.Ports = append(c.Ports, fmt.Sprintf("%s:%s", hostPort, containerPort))
+		} else {
+			c.Ports = append(c.Ports, strings.Split(p, "/")[0])
+		}
+	}
+	c.Ports = dedupPorts(c.Ports)
+
+	return c
+}
+
+// parseDockerUpTime converts "Up ..." durations to seconds. Docker's wording
+// is a small closed set (seconds/minutes/hours/days/weeks/months); anything
+// else — Created, Restarting, Paused, Exited — is not "up" and yields 0.
+func parseDockerUpTime(status string) uint64 {
+	if !strings.HasPrefix(status, "Up ") {
+		return 0
+	}
+
+	rest := strings.TrimPrefix(status, "Up ")
+	// "3 days (healthy)" or "About an hour" — isolate the first two words.
+	words := strings.Fields(rest)
+	if len(words) == 0 {
+		return 0
+	}
+
+	multipliers := map[string]uint64{
+		"second": 1, "seconds": 1,
+		"minute": 60, "minutes": 60,
+		"hour": 3600, "hours": 3600,
+		"day": 86400, "days": 86400,
+		"week": 604800, "weeks": 604800,
+		"month": 2592000, "months": 2592000,
+	}
+
+	amount := 0.0
+	unit := ""
+	if first := strings.ToLower(words[0]); first == "about" || first == "less" || first == "an" || first == "a" {
+		// "About an hour", "Less than a second": find the unit word.
+		amount = 1
+		for _, w := range words {
+			if _, ok := multipliers[strings.ToLower(w)]; ok {
+				unit = w
+				break
+			}
+		}
+		if unit == "" {
+			return 0
+		}
+	} else {
+		n, err := strconv.ParseFloat(words[0], 64)
+		if err != nil || len(words) < 2 {
+			return 0
+		}
+		amount = n
+		unit = words[1]
+	}
+
+	mult, ok := multipliers[strings.ToLower(unit)]
+	if !ok {
+		return 0
+	}
+
+	return uint64(amount * float64(mult))
 }
